@@ -1,9 +1,6 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "installCommand": "npm install",
-  "prisma": {
-    "generateCommand": "npx prisma generate"
-  },
+  "installCommand": "npm install && npx prisma generate",
   "framework": "nestjs"
 }
