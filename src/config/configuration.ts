@@ -4,7 +4,7 @@ export default () => ({
     url: process.env.DATABASE_URL,
   },
   redis: {
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    url: process.env.KV_URL || process.env.REDIS_URL || '',
   },
   supabase: {
     url: process.env.SUPABASE_URL || 'https://qvfdgxzgdumlralmvszc.supabase.co',
