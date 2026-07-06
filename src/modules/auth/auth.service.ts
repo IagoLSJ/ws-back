@@ -104,7 +104,7 @@ export class AuthService {
 
     const accessToken = this.jwt.sign(payload, {
       secret: this.config.get<string>('jwt.secret')!,
-      expiresIn: this.config.get<string>('jwt.accessExpires')!,
+      expiresIn: this.config.get<string>('jwt.accessExpires')! as any,
     });
 
     const refreshTokenValue = uuidv4();

@@ -17,8 +17,11 @@
     "strictBindCallApply": true,
     "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
+    "ignoreDeprecations": "6.0",
+    "types": ["jest", "node"],
     "paths": {
       "@/*": ["src/*"]
     }
-  }
+  },
+  "exclude": ["prisma/config.ts", "node_modules", "dist"]
 }
