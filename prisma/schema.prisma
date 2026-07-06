@@ -1,0 +1,420 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleNegocio {
+  SUPER_ADMIN
+  GERENTE
+  OPERADOR
+  VISUALIZADOR
+}
+
+enum ProdutoStatus {
+  ATIVO
+  PAUSADO
+  ESGOTADO
+}
+
+enum TipoMovimentacao {
+  ENTRADA
+  SAIDA_VENDA
+  SAIDA_AJUSTE
+  PERDA
+  TRANSFERENCIA_ENTRADA
+  TRANSFERENCIA_SAIDA
+  INVENTARIO
+}
+
+enum StatusPedido {
+  PENDENTE
+  CONFIRMADO
+  PREPARANDO
+  PRONTO
+  SAIU_PARA_ENTREGA
+  ENTREGUE
+  CANCELADO
+}
+
+enum MetodoPagamento {
+  DINHEIRO
+  CARTAO_CREDITO
+  CARTAO_DEBITO
+  PIX
+  OUTRO
+}
+
+enum StatusPagamento {
+  PENDENTE
+  APROVADO
+  RECUSADO
+  CANCELADO
+  ESTORNADO
+}
+
+model Usuario {
+  id            String   @id @default(uuid())
+  nome          String
+  email         String   @unique
+  senhaHash     String
+  avatarUrl     String?
+  ativo         Boolean  @default(true)
+  criadoEm      DateTime @default(now())
+  atualizadoEm  DateTime @updatedAt
+
+  membros        MembroNegocio[]
+  tokens         RefreshToken[]
+  movimentacoes  MovimentacaoEstoque[]
+  pedidos        Pedido[]
+  carrinhos      Carrinho[]
+  auditLogs      AuditLog[]
+
+  @@map("usuarios")
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  token      String   @unique
+  usuarioId  String
+  expiresAt  DateTime
+  revogado   Boolean  @default(false)
+  criadoEm   DateTime @default(now())
+
+  usuario    Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+model Negocio {
+  id            String   @id @default(uuid())
+  nome          String
+  slug          String   @unique
+  descricao     String?
+  logoUrl       String?
+  bannerUrl     String?
+  corPrimaria   String?
+  ativo         Boolean  @default(true)
+  criadoEm      DateTime @default(now())
+  atualizadoEm  DateTime @updatedAt
+
+  membros           MembroNegocio[]
+  categorias        Categoria[]
+  produtos          Produto[]
+  estoques          EstoqueItem[]
+  movimentacoes     MovimentacaoEstoque[]
+  carrinhos         Carrinho[]
+  pedidos           Pedido[]
+  clientesWhatsapp  ClienteWhatsApp[]
+  configuracoes     ConfiguracaoNegocio?
+
+  @@map("negocios")
+}
+
+model ConfiguracaoNegocio {
+  id                    String    @id @default(uuid())
+  negocioId             String    @unique
+  controleEstoqueAtivo  Boolean   @default(true)
+  estoqueMinimoPadrao   Int       @default(5)
+  taxaFrete             Decimal   @default(0) @db.Decimal(10, 2)
+  webhookUrl            String?
+  emailAlertas          String?
+  horarioFuncionamento  Json?
+  endereco              Json?
+  telefoneContato       String?
+
+  negocio Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+
+  @@map("configuracoes_negocio")
+}
+
+model MembroNegocio {
+  id         String       @id @default(uuid())
+  usuarioId  String
+  negocioId  String
+  role       RoleNegocio
+  ativo      Boolean      @default(true)
+  criadoEm   DateTime     @default(now())
+
+  usuario    Usuario      @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  negocio    Negocio      @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, negocioId])
+  @@index([negocioId])
+  @@map("membros_negocio")
+}
+
+model Categoria {
+  id         String    @id @default(uuid())
+  negocioId  String
+  nome       String
+  descricao  String?
+  iconUrl    String?
+  ordem      Int       @default(0)
+  ativo      Boolean   @default(true)
+  criadoEm   DateTime  @default(now())
+
+  negocio    Negocio   @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  produtos   Produto[]
+
+  @@unique([negocioId, nome])
+  @@index([negocioId, ativo])
+  @@map("categorias")
+}
+
+model Produto {
+  id                   String         @id @default(uuid())
+  negocioId            String
+  categoriaId          String?
+  nome                 String
+  descricao            String?
+  preco                Decimal        @db.Decimal(10, 2)
+  tipoDesconto         String?
+  valorDesconto        Decimal?       @db.Decimal(10, 2)
+  sku                  String?
+  status               ProdutoStatus  @default(ATIVO)
+  destaque             Boolean        @default(false)
+  ordem                Int            @default(0)
+  controlaEstoque      Boolean        @default(true)
+  criadoEm             DateTime       @default(now())
+  atualizadoEm         DateTime       @updatedAt
+
+  negocio              Negocio           @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  categoria            Categoria?        @relation(fields: [categoriaId], references: [id])
+  imagens              ImagemProduto[]
+  gruposModificadores  GrupoModificador[]
+  estoqueItem          EstoqueItem?
+  carrinhoItens        CarrinhoItem[]
+  pedidoItens          PedidoItem[]
+
+  @@index([negocioId, status])
+  @@index([negocioId, categoriaId])
+  @@map("produtos")
+}
+
+model ImagemProduto {
+  id         String  @id @default(uuid())
+  produtoId  String
+  url        String
+  ordem      Int     @default(0)
+  principal  Boolean @default(false)
+
+  produto    Produto @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+
+  @@map("imagens_produto")
+}
+
+model GrupoModificador {
+  id          String   @id @default(uuid())
+  produtoId   String
+  nome        String
+  obrigatorio Boolean  @default(false)
+  minSelecao  Int      @default(0)
+  maxSelecao  Int      @default(1)
+  ordem       Int      @default(0)
+
+  produto     Produto           @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+  opcoes      OpcaoModificador[]
+
+  @@map("grupos_modificador")
+}
+
+model OpcaoModificador {
+  id         String   @id @default(uuid())
+  grupoId    String
+  nome       String
+  precoExtra Decimal  @default(0) @db.Decimal(10, 2)
+  ativo      Boolean  @default(true)
+  ordem      Int      @default(0)
+
+  grupo              GrupoModificador @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+  carrinhoItemOpcoes CarrinhoItemOpcao[]
+
+  @@map("opcoes_modificador")
+}
+
+model EstoqueItem {
+  id              String   @id @default(uuid())
+  negocioId       String
+  produtoId       String?  @unique
+  nome            String?
+  sku             String?
+  quantidadeAtual Int      @default(0)
+  estoqueMinimo   Int      @default(5)
+  unidade         String   @default("un")
+  criadoEm        DateTime @default(now())
+  atualizadoEm    DateTime @updatedAt
+
+  negocio          Negocio               @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  produto          Produto?              @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+  movimentacoes    MovimentacaoEstoque[]
+
+  @@index([negocioId])
+  @@map("estoque_itens")
+}
+
+model MovimentacaoEstoque {
+  id              String             @id @default(uuid())
+  negocioId       String
+  estoqueItemId   String
+  usuarioId       String?
+  tipo            TipoMovimentacao
+  quantidade      Int
+  quantidadeAntes Int
+  quantidadeApos  Int
+  motivo          String?
+  referencia      String?
+  criadoEm        DateTime           @default(now())
+
+  negocio         Negocio            @relation(fields: [negocioId], references: [id])
+  estoqueItem     EstoqueItem        @relation(fields: [estoqueItemId], references: [id])
+  usuario         Usuario?           @relation(fields: [usuarioId], references: [id])
+
+  @@index([negocioId, criadoEm])
+  @@index([estoqueItemId, criadoEm])
+  @@map("movimentacoes_estoque")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  usuarioId  String?
+  negocioId  String?
+  acao       String
+  entidade   String?
+  entidadeId String?
+  payload    Json?
+  ip         String?
+  userAgent  String?
+  criadoEm   DateTime @default(now())
+
+  usuario    Usuario? @relation(fields: [usuarioId], references: [id])
+
+  @@index([negocioId, criadoEm])
+  @@index([usuarioId, criadoEm])
+  @@map("audit_logs")
+}
+
+model ClienteWhatsApp {
+  id              String   @id @default(uuid())
+  negocioId       String
+  telefone        String
+  sessionId       String   @unique
+  nome            String?
+  endereco        Json?    @db.Json
+  ultimaInteracao DateTime @default(now())
+  criadoEm        DateTime @default(now())
+
+  negocio         Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+
+  @@unique([negocioId, telefone])
+  @@index([negocioId, telefone])
+  @@map("clientes_whatsapp")
+}
+
+model Carrinho {
+  id         String   @id @default(uuid())
+  negocioId  String
+  sessionId  String
+  usuarioId  String?
+  criadoEm   DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  negocio    Negocio       @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  usuario    Usuario?      @relation(fields: [usuarioId], references: [id])
+  itens      CarrinhoItem[]
+
+  @@unique([negocioId, sessionId])
+  @@index([negocioId, sessionId])
+  @@map("carrinhos")
+}
+
+model CarrinhoItem {
+  id         String   @id @default(uuid())
+  carrinhoId String
+  produtoId  String
+  quantidade Int      @default(1)
+  observacao String?
+  criadoEm   DateTime @default(now())
+
+  carrinho           Carrinho                      @relation(fields: [carrinhoId], references: [id], onDelete: Cascade)
+  produto            Produto                       @relation(fields: [produtoId], references: [id])
+  opcoesSelecionadas CarrinhoItemOpcao[]
+
+  @@index([carrinhoId])
+  @@map("carrinho_itens")
+}
+
+model CarrinhoItemOpcao {
+  id            String @id @default(uuid())
+  carrinhoItemId String
+  opcaoId        String
+
+  carrinhoItem CarrinhoItem      @relation(fields: [carrinhoItemId], references: [id], onDelete: Cascade)
+  opcao        OpcaoModificador  @relation(fields: [opcaoId], references: [id])
+
+  @@unique([carrinhoItemId, opcaoId])
+  @@map("carrinho_itens_opcoes")
+}
+
+model Pedido {
+  id             String       @id @default(uuid())
+  negocioId      String
+  sessionId      String
+  usuarioId      String?
+  status         StatusPedido @default(PENDENTE)
+  total          Decimal      @db.Decimal(10, 2)
+  tipoEntrega    String?      @default("ENTREGA")
+  taxaFrete      Decimal?     @db.Decimal(10, 2)
+  observacao     String?
+  endereco       Json?        @db.Json
+  contato        String?
+  agendadoPara   DateTime?
+  criadoEm       DateTime     @default(now())
+  atualizadoEm   DateTime     @updatedAt
+
+  negocio    Negocio      @relation(fields: [negocioId], references: [id])
+  usuario    Usuario?     @relation(fields: [usuarioId], references: [id])
+  itens      PedidoItem[]
+  pagamentos Pagamento[]
+
+  @@index([negocioId, criadoEm])
+  @@index([sessionId])
+  @@map("pedidos")
+}
+
+model PedidoItem {
+  id              String   @id @default(uuid())
+  pedidoId        String
+  produtoId       String
+  produtoNome     String
+  precoUnitario   Decimal  @db.Decimal(10, 2)
+  quantidade      Int      @default(1)
+  modificadores   Json?    @db.Json
+  criadoEm        DateTime @default(now())
+
+  pedido  Pedido  @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  produto Produto @relation(fields: [produtoId], references: [id])
+
+  @@index([pedidoId])
+  @@map("pedido_itens")
+}
+
+model Pagamento {
+  id              String          @id @default(uuid())
+  pedidoId        String
+  valor           Decimal         @db.Decimal(10, 2)
+  metodo          MetodoPagamento
+  status          StatusPagamento @default(PENDENTE)
+  transacaoId     String?
+  dadosPagamento  Json?           @db.Json
+  criadoEm        DateTime        @default(now())
+  atualizadoEm    DateTime        @updatedAt
+
+  pedido Pedido @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+
+  @@index([pedidoId])
+  @@map("pagamentos")
+}

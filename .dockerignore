@@ -1,0 +1,16 @@
+.git
+.git/**
+.gitignore
+**/.gitignore
+node_modules
+**/node_modules
+dist
+**/dist
+frontend/dist
+backend/dist
+load-test/reports
+load-test/.docker-config
+.env
+.env.*
+!.env.example
+!.env.production.example

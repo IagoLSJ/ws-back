@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "estoque_itens" ADD COLUMN     "criadoEm" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN     "nome" TEXT,
+ADD COLUMN     "sku" TEXT,
+ALTER COLUMN "produtoId" DROP NOT NULL;
