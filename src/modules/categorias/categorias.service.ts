@@ -16,7 +16,7 @@ export class CategoriasService {
   }
 
   private async invalidateCache(negocioId: string) {
-    await this.redis.del(this.cacheKey(negocioId));
+    await this.redis.del(this.cacheKey(negocioId), `catalog:v2:${negocioId}:products`);
   }
 
   async create(negocioId: string, dto: CriarCategoriaDto) {
@@ -62,7 +62,15 @@ export class CategoriasService {
 
   async remove(negocioId: string, id: string) {
     await this.findOne(negocioId, id);
-    await this.prisma.categoria.delete({ where: { id } });
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.produto.updateMany({
+        where: { categoriaId: id },
+        data: { categoriaId: null },
+      });
+      await tx.categoria.delete({ where: { id } });
+    });
+
     await this.invalidateCache(negocioId);
   }
 

@@ -43,4 +43,19 @@ export class AtualizarConfiguracaoDto {
   @IsOptional()
   @IsString()
   telefoneContato?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  chatbotAtivo?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  mensagemBoasVindas?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  mensagemFallback?: string;
 }

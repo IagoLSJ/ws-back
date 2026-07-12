@@ -20,6 +20,7 @@ import { PedidosModule } from './modules/pedidos/pedidos.module';
 import { PdvModule } from './modules/pdv/pdv.module';
 import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
 import { AuditModule } from './modules/audit/audit.module';
+import { ImprimirModule } from './modules/imprimir/imprimir.module';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import configuration from './config/configuration';
 
@@ -53,6 +54,7 @@ import configuration from './config/configuration';
     PdvModule,
     WhatsappModule,
     AuditModule,
+    ImprimirModule,
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },

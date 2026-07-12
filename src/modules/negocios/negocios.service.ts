@@ -1,9 +1,11 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, Inject } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { StorageService } from '../../infra/storage/storage.service';
+import { RedisService } from '../../infra/cache/redis.service';
 import { CriarNegocioDto } from './dto/criar-negocio.dto';
 import { AtualizarNegocioDto } from './dto/atualizar-negocio.dto';
 import { AtualizarConfiguracaoDto } from './dto/atualizar-configuracao.dto';
+import { CriarTaxaFreteBairroDto, AtualizarTaxaFreteBairroDto } from './dto/gerenciar-taxa-frete-bairro.dto';
 import { RoleNegocio } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -12,6 +14,7 @@ export class NegociosService {
   constructor(
     private prisma: PrismaService,
     private storage: StorageService,
+    private redis: RedisService,
   ) {}
 
   async create(dto: CriarNegocioDto, usuarioId: string) {
@@ -95,6 +98,7 @@ export class NegociosService {
       if (existing && existing.id !== id) throw new ConflictException('Slug já em uso');
     }
 
+    await this.redis.del(`catalog:v2:${id}:products`);
     return this.prisma.negocio.update({ where: { id }, data });
   }
 
@@ -158,5 +162,30 @@ export class NegociosService {
     const key = this.storage.extractKey(negocio.logoUrl);
     if (key) this.storage.deleteObject(key).catch(() => {});
     await this.prisma.negocio.update({ where: { id }, data: { logoUrl: undefined } });
+  }
+
+  async listarTaxasFreteBairro(negocioId: string) {
+    return this.prisma.taxaFreteBairro.findMany({
+      where: { negocioId },
+      orderBy: { bairro: 'asc' },
+    });
+  }
+
+  async criarTaxaFreteBairro(negocioId: string, dto: CriarTaxaFreteBairroDto) {
+    return this.prisma.taxaFreteBairro.create({
+      data: { negocioId, bairro: dto.bairro, taxa: dto.taxa },
+    });
+  }
+
+  async atualizarTaxaFreteBairro(id: string, dto: AtualizarTaxaFreteBairroDto) {
+    const data: any = {};
+    for (const [key, value] of Object.entries(dto)) {
+      if (value !== undefined) data[key] = value;
+    }
+    return this.prisma.taxaFreteBairro.update({ where: { id }, data });
+  }
+
+  async removerTaxaFreteBairro(id: string) {
+    return this.prisma.taxaFreteBairro.delete({ where: { id } });
   }
 }

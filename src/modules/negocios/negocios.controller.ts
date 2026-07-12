@@ -4,6 +4,7 @@ import { NegociosService } from './negocios.service';
 import { CriarNegocioDto } from './dto/criar-negocio.dto';
 import { AtualizarNegocioDto } from './dto/atualizar-negocio.dto';
 import { AtualizarConfiguracaoDto } from './dto/atualizar-configuracao.dto';
+import { CriarTaxaFreteBairroDto, AtualizarTaxaFreteBairroDto } from './dto/gerenciar-taxa-frete-bairro.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -79,5 +80,33 @@ export class NegociosController {
   @ApiOperation({ summary: 'Atualizar configurações do negócio' })
   updateConfig(@Param('id') id: string, @Body() dto: AtualizarConfiguracaoDto) {
     return this.service.updateConfig(id, dto);
+  }
+
+  @Get(':id/taxas-frete-bairro')
+  @Roles(RoleNegocio.VISUALIZADOR)
+  @ApiOperation({ summary: 'Listar taxas de frete por bairro' })
+  listarTaxasFreteBairro(@Param('id') id: string) {
+    return this.service.listarTaxasFreteBairro(id);
+  }
+
+  @Post(':id/taxas-frete-bairro')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Criar taxa de frete para bairro' })
+  criarTaxaFreteBairro(@Param('id') id: string, @Body() dto: CriarTaxaFreteBairroDto) {
+    return this.service.criarTaxaFreteBairro(id, dto);
+  }
+
+  @Patch('taxas-frete-bairro/:taxaId')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Atualizar taxa de frete de bairro' })
+  atualizarTaxaFreteBairro(@Param('taxaId') taxaId: string, @Body() dto: AtualizarTaxaFreteBairroDto) {
+    return this.service.atualizarTaxaFreteBairro(taxaId, dto);
+  }
+
+  @Delete('taxas-frete-bairro/:taxaId')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Remover taxa de frete de bairro' })
+  removerTaxaFreteBairro(@Param('taxaId') taxaId: string) {
+    return this.service.removerTaxaFreteBairro(taxaId);
   }
 }

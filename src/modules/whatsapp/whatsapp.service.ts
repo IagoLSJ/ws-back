@@ -14,7 +14,7 @@ export class WhatsappService {
     private pedidosService: PedidosService,
   ) {}
 
-  private async resolveNegocioId(slug: string): Promise<string> {
+  async resolveNegocioId(slug: string): Promise<string> {
     const negocio = await this.prisma.negocio.findUnique({
       where: { slug, ativo: true },
       select: { id: true },

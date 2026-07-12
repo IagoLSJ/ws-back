@@ -39,6 +39,12 @@ enum StatusPedido {
   CANCELADO
 }
 
+enum TipoMensagemWhatsApp {
+  CLIENTE
+  BOT
+  ADMIN
+}
+
 enum MetodoPagamento {
   DINHEIRO
   CARTAO_CREDITO
@@ -109,6 +115,8 @@ model Negocio {
   pedidos           Pedido[]
   clientesWhatsapp  ClienteWhatsApp[]
   configuracoes     ConfiguracaoNegocio?
+  taxasFreteBairro  TaxaFreteBairro[]
+  impressoras       ImpressoraConfig[]
 
   @@map("negocios")
 }
@@ -124,10 +132,47 @@ model ConfiguracaoNegocio {
   horarioFuncionamento  Json?
   endereco              Json?
   telefoneContato       String?
+  chatbotAtivo          Boolean   @default(true)
+  mensagemBoasVindas    String?
+  mensagemFallback      String?
 
   negocio Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
 
   @@map("configuracoes_negocio")
+}
+
+model TaxaFreteBairro {
+  id        String   @id @default(uuid())
+  negocioId String
+  bairro    String
+  taxa      Decimal  @default(0) @db.Decimal(10, 2)
+  ativo     Boolean  @default(true)
+  criadoEm  DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  negocio   Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+
+  @@unique([negocioId, bairro])
+  @@index([negocioId, ativo])
+  @@map("taxas_frete_bairro")
+}
+
+model ImpressoraConfig {
+  id            String   @id @default(uuid())
+  negocioId     String
+  tipo          String   @default("TERMICA")
+  conexao       String   @default("REDE")
+  enderecoIp    String?
+  porta         Int      @default(9100)
+  papelLargura  Int      @default(80)
+  ativo         Boolean  @default(true)
+  criadoEm      DateTime @default(now())
+  atualizadoEm  DateTime @updatedAt
+
+  negocio Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+
+  @@index([negocioId, ativo])
+  @@map("impressoras_config")
 }
 
 model MembroNegocio {
@@ -236,16 +281,17 @@ model OpcaoModificador {
 }
 
 model EstoqueItem {
-  id              String   @id @default(uuid())
+  id              String          @id @default(uuid())
   negocioId       String
-  produtoId       String?  @unique
+  produtoId       String?         @unique
   nome            String?
   sku             String?
-  quantidadeAtual Int      @default(0)
-  estoqueMinimo   Int      @default(5)
-  unidade         String   @default("un")
-  criadoEm        DateTime @default(now())
-  atualizadoEm    DateTime @updatedAt
+  precoCusto      Decimal?        @db.Decimal(10, 2)
+  quantidadeAtual Int             @default(0)
+  estoqueMinimo   Int             @default(5)
+  unidade         String          @default("un")
+  criadoEm        DateTime        @default(now())
+  atualizadoEm    DateTime        @updatedAt
 
   negocio          Negocio               @relation(fields: [negocioId], references: [id], onDelete: Cascade)
   produto          Produto?              @relation(fields: [produtoId], references: [id], onDelete: Cascade)
@@ -303,14 +349,29 @@ model ClienteWhatsApp {
   sessionId       String   @unique
   nome            String?
   endereco        Json?    @db.Json
+  modoHumano      Boolean  @default(false)
   ultimaInteracao DateTime @default(now())
   criadoEm        DateTime @default(now())
 
-  negocio         Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  negocio  Negocio           @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  mensagens MensagemWhatsApp[]
 
   @@unique([negocioId, telefone])
   @@index([negocioId, telefone])
   @@map("clientes_whatsapp")
+}
+
+model MensagemWhatsApp {
+  id         String               @id @default(uuid())
+  clienteId  String
+  texto      String
+  tipo       TipoMensagemWhatsApp
+  criadoEm   DateTime             @default(now())
+
+  cliente    ClienteWhatsApp      @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  @@index([clienteId, criadoEm])
+  @@map("mensagens_whatsapp")
 }
 
 model Carrinho {

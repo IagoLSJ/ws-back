@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { RedisService } from '../../infra/cache/redis.service';
 import { StorageService } from '../../infra/storage/storage.service';
@@ -8,6 +8,8 @@ import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class ProdutosService {
+  private readonly logger = new Logger(ProdutosService.name);
+
   constructor(
     private prisma: PrismaService,
     private redis: RedisService,
@@ -127,27 +129,33 @@ export class ProdutosService {
     const data: any = { ...dto };
     delete data.gruposModificadores;
 
-    if (dto.gruposModificadores) {
-      await this.prisma.grupoModificador.deleteMany({ where: { produtoId: id } });
-
-      await this.prisma.grupoModificador.createMany({
-        data: dto.gruposModificadores.map((g) => ({
-          produtoId: id,
-          nome: g.nome!,
-          obrigatorio: g.obrigatorio ?? false,
-          minSelecao: g.minSelecao ?? 0,
-          maxSelecao: g.maxSelecao ?? 1,
-          ordem: g.ordem ?? 0,
-        })),
-      });
-
-      for (const g of dto.gruposModificadores) {
-        if (g.opcoes) {
-          const grupo = await this.prisma.grupoModificador.findFirst({
-            where: { produtoId: id, nome: g.nome },
+    const produto = await this.prisma.$transaction(async (tx) => {
+      if (dto.gruposModificadores) {
+        const oldOpcoes = await tx.opcaoModificador.findMany({
+          where: { grupo: { produtoId: id } },
+          select: { id: true },
+        });
+        if (oldOpcoes.length) {
+          await tx.carrinhoItemOpcao.deleteMany({
+            where: { opcaoId: { in: oldOpcoes.map((o) => o.id) } },
           });
-          if (grupo) {
-            await this.prisma.opcaoModificador.createMany({
+        }
+
+        await tx.grupoModificador.deleteMany({ where: { produtoId: id } });
+
+        for (const g of dto.gruposModificadores) {
+          const grupo = await tx.grupoModificador.create({
+            data: {
+              produtoId: id,
+              nome: g.nome!,
+              obrigatorio: g.obrigatorio ?? false,
+              minSelecao: g.minSelecao ?? 0,
+              maxSelecao: g.maxSelecao ?? 1,
+              ordem: g.ordem ?? 0,
+            },
+          });
+          if (g.opcoes?.length) {
+            await tx.opcaoModificador.createMany({
               data: g.opcoes.map((o) => ({
                 grupoId: grupo.id,
                 nome: o.nome!,
@@ -158,16 +166,16 @@ export class ProdutosService {
           }
         }
       }
-    }
 
-    const produto = await this.prisma.produto.update({
-      where: { id },
-      data,
-      include: {
-        categoria: true,
-        imagens: { orderBy: { ordem: 'asc' } },
-        gruposModificadores: { include: { opcoes: true } },
-      },
+      return tx.produto.update({
+        where: { id },
+        data,
+        include: {
+          categoria: true,
+          imagens: { orderBy: { ordem: 'asc' } },
+          gruposModificadores: { include: { opcoes: true } },
+        },
+      });
     });
 
     this.normalizeImagens(produto);
@@ -178,13 +186,30 @@ export class ProdutosService {
   async remove(negocioId: string, id: string) {
     await this.findOne(negocioId, id);
 
+    const pedidoCount = await this.prisma.pedidoItem.count({ where: { produtoId: id } });
+    if (pedidoCount > 0) {
+      throw new BadRequestException(
+        'Produto possui pedidos vinculados. Remova o vínculo antes de excluir.',
+      );
+    }
+
     const imagens = await this.prisma.imagemProduto.findMany({ where: { produtoId: id } });
     for (const img of imagens) {
       const key = this.storage.extractKey(img.url);
-      if (key) this.storage.deleteObject(key).catch(() => {});
+      if (key) {
+        try {
+          await this.storage.deleteObject(key);
+        } catch (e) {
+          this.logger.warn(`Falha ao deletar imagem do storage: ${key}`);
+        }
+      }
     }
 
-    await this.prisma.produto.delete({ where: { id } });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.carrinhoItem.deleteMany({ where: { produtoId: id } });
+      await tx.produto.delete({ where: { id } });
+    });
+
     await this.invalidateCache(negocioId);
   }
 
@@ -212,7 +237,13 @@ export class ProdutosService {
 
     if (existente) {
       const oldKey = this.storage.extractKey(existente.url);
-      if (oldKey) this.storage.deleteObject(oldKey).catch(() => {});
+      if (oldKey) {
+        try {
+          await this.storage.deleteObject(oldKey);
+        } catch (e) {
+          this.logger.warn(`Falha ao deletar imagem antiga: ${oldKey}`);
+        }
+      }
       await this.prisma.imagemProduto.delete({ where: { id: existente.id } });
     }
 
@@ -235,7 +266,13 @@ export class ProdutosService {
     if (!img) throw new NotFoundException('Imagem não encontrada');
 
     const key = this.storage.extractKey(img.url);
-    if (key) this.storage.deleteObject(key).catch(() => {});
+    if (key) {
+      try {
+        await this.storage.deleteObject(key);
+      } catch (e) {
+        this.logger.warn(`Falha ao deletar imagem do storage: ${key}`);
+      }
+    }
 
     await this.prisma.imagemProduto.delete({ where: { id: imagemId } });
   }
@@ -250,7 +287,8 @@ export class ProdutosService {
         descricao: true,
         logoUrl: true,
         bannerUrl: true,
-        configuracoes: { select: { taxaFrete: true } },
+        configuracoes: { select: { taxaFrete: true, endereco: true, telefoneContato: true } },
+        taxasFreteBairro: { where: { ativo: true }, select: { bairro: true, taxa: true } },
       },
     });
     if (!negocio) throw new NotFoundException('Negócio não encontrado');

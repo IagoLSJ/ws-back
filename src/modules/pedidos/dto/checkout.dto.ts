@@ -6,6 +6,7 @@ import {
   Min,
   ValidateNested,
   IsObject,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -78,6 +79,7 @@ export class CheckoutDto {
   @ApiPropertyOptional({ example: '(11) 99999-8888' })
   @IsOptional()
   @IsString()
+  @Matches(/^[\d\s\-\(\)\+]{8,20}$/, { message: 'Contato inválido. Use apenas números, espaços, hífens e parênteses.' })
   contato?: string;
 
   @ApiPropertyOptional({ example: '2025-12-25T18:00:00.000Z' })

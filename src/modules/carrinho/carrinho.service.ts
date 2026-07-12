@@ -12,8 +12,14 @@ export class CarrinhoService {
       where: { slug, ativo: true },
       select: { id: true },
     });
-    if (!negocio) throw new NotFoundException('Negócio não encontrado');
-    return negocio.id;
+    if (negocio) return negocio.id;
+
+    const byId = await this.prisma.negocio.findUnique({
+      where: { id: slug, ativo: true },
+      select: { id: true },
+    });
+    if (!byId) throw new NotFoundException('Negócio não encontrado');
+    return byId.id;
   }
 
   private async obterOuCriarCarrinho(negocioId: string, sessionId: string, usuarioId?: string) {
@@ -89,6 +95,21 @@ export class CarrinhoService {
       });
       if (opcoes.length !== dto.opcoesSelecionadas.length) {
         throw new BadRequestException('Algumas opções selecionadas são inválidas');
+      }
+    }
+
+    const gruposObrigatorios = await this.prisma.grupoModificador.findMany({
+      where: { produtoId: dto.produtoId, obrigatorio: true },
+      include: { opcoes: true },
+    });
+    for (const grupo of gruposObrigatorios) {
+      const hasOption = (dto.opcoesSelecionadas ?? []).some((id) =>
+        grupo.opcoes.some((o) => o.id === id),
+      );
+      if (!hasOption) {
+        throw new BadRequestException(
+          `"${produto.nome}" requer seleção obrigatória em "${grupo.nome}"`,
+        );
       }
     }
 

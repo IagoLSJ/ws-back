@@ -27,6 +27,7 @@ export class EstoqueService {
       nome: item.produto?.nome ?? item.nome ?? 'Sem nome',
       sku: item.produto?.sku ?? item.sku ?? null,
       ehAvulso: !item.produtoId,
+      precoCusto: item.precoCusto ? Number(item.precoCusto) : null,
     };
   }
 
@@ -90,6 +91,7 @@ export class EstoqueService {
         produtoId: dto.produtoId ?? null,
         nome: dto.nome ?? null,
         sku: dto.sku ?? null,
+        precoCusto: dto.precoCusto ?? undefined,
         quantidadeAtual: dto.quantidadeAtual ?? 0,
         estoqueMinimo: dto.estoqueMinimo ?? estoqueMinimoPadrao,
         unidade: dto.unidade ?? 'un',
@@ -121,7 +123,12 @@ export class EstoqueService {
 
   async remover(negocioId: string, itemId: string) {
     await this.findOne(negocioId, itemId);
-    await this.prisma.estoqueItem.delete({ where: { id: itemId } });
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.movimentacaoEstoque.deleteMany({ where: { estoqueItemId: itemId } });
+      await tx.estoqueItem.delete({ where: { id: itemId } });
+    });
+
     return { message: 'Item removido' };
   }
 

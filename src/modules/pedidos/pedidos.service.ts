@@ -2,14 +2,26 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../../infra/database/prisma.service';
 import { CheckoutDto } from './dto/checkout.dto';
 import { EstoqueService } from '../estoque/estoque.service';
+import { ImprimirService } from '../imprimir/imprimir.service';
 import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao } from '@prisma/client';
 import { calcularPrecoFinal } from '../../common/utils/preco';
+
+const TRANSICOES_VALIDAS: Record<StatusPedido, StatusPedido[]> = {
+  [StatusPedido.PENDENTE]: [StatusPedido.CONFIRMADO, StatusPedido.CANCELADO],
+  [StatusPedido.CONFIRMADO]: [StatusPedido.PREPARANDO, StatusPedido.CANCELADO],
+  [StatusPedido.PREPARANDO]: [StatusPedido.PRONTO, StatusPedido.CANCELADO],
+  [StatusPedido.PRONTO]: [StatusPedido.SAIU_PARA_ENTREGA, StatusPedido.ENTREGUE, StatusPedido.CANCELADO],
+  [StatusPedido.SAIU_PARA_ENTREGA]: [StatusPedido.ENTREGUE, StatusPedido.CANCELADO],
+  [StatusPedido.ENTREGUE]: [],
+  [StatusPedido.CANCELADO]: [],
+};
 
 @Injectable()
 export class PedidosService {
   constructor(
     private prisma: PrismaService,
     private estoqueService: EstoqueService,
+    private imprimirService: ImprimirService,
   ) {}
 
   private async resolveNegocioId(slug: string): Promise<string> {
@@ -115,6 +127,30 @@ export class PedidosService {
       throw new BadRequestException('Carrinho vazio');
     }
 
+    const produtosComGrupos = await this.prisma.produto.findMany({
+      where: { id: { in: carrinho.itens.map((i) => i.produto.id) }, negocioId },
+      include: {
+        gruposModificadores: {
+          where: { obrigatorio: true },
+          include: { opcoes: true },
+        },
+      },
+    });
+    for (const item of carrinho.itens) {
+      const prod = produtosComGrupos.find((p) => p.id === item.produto.id);
+      if (!prod) continue;
+      for (const grupo of prod.gruposModificadores) {
+        const hasOption = item.opcoesSelecionadas.some((o) =>
+          grupo.opcoes.some((op) => op.id === o.opcaoId),
+        );
+        if (!hasOption) {
+          throw new BadRequestException(
+            `"${item.produto.nome}" requer seleção obrigatória em "${grupo.nome}"`,
+          );
+        }
+      }
+    }
+
     for (const item of carrinho.itens) {
       if (!item.produto.controlaEstoque) continue;
       const estoqueItem = await this.prisma.estoqueItem.findFirst({
@@ -145,7 +181,22 @@ export class PedidosService {
     });
 
     const totalProdutos = itensData.reduce((acc, i) => acc + i.precoUnitario * i.quantidade, 0);
-    const taxaFrete = dto.tipoEntrega === 'ENTREGA' ? Number(config?.taxaFrete ?? 0) : 0;
+
+    let taxaFrete = 0;
+    if (dto.tipoEntrega === 'ENTREGA') {
+      const bairro = dto.enderecoEntrega?.bairro;
+      if (bairro) {
+        const taxaBairro = await this.prisma.taxaFreteBairro.findFirst({
+          where: { negocioId, bairro: { equals: bairro, mode: 'insensitive' }, ativo: true },
+        });
+        if (taxaBairro) {
+          taxaFrete = Number(taxaBairro.taxa);
+        }
+      }
+      if (taxaFrete === 0) {
+        taxaFrete = Number(config?.taxaFrete ?? 0);
+      }
+    }
     const valorTotal = Math.round((totalProdutos + taxaFrete) * 100) / 100;
 
     const pedido = await this.prisma.pedido.create({
@@ -160,7 +211,18 @@ export class PedidosService {
         observacao: dto.observacao,
         endereco: dto.enderecoEntrega ? JSON.parse(JSON.stringify(dto.enderecoEntrega)) : undefined,
         contato: dto.contato,
-        agendadoPara: dto.agendadoPara ? new Date(dto.agendadoPara) : undefined,
+        agendadoPara: dto.agendadoPara
+          ? (() => {
+              const data = new Date(dto.agendadoPara);
+              if (isNaN(data.getTime())) {
+                throw new BadRequestException('Data de agendamento inválida');
+              }
+              if (data <= new Date()) {
+                throw new BadRequestException('Agendamento deve ser no futuro');
+              }
+              return data;
+            })()
+          : undefined,
         itens: { create: itensData },
         pagamentos: {
           create: {
@@ -183,6 +245,7 @@ export class PedidosService {
       });
       pedido.status = StatusPedido.CONFIRMADO;
       await this.baixarEstoque(negocioId, pedido, usuarioId);
+      this.imprimirService.imprimirComanda(negocioId, pedido.id).catch(() => {});
     }
 
     await this.prisma.carrinhoItem.deleteMany({ where: { carrinhoId: carrinho.id } });
@@ -226,6 +289,13 @@ export class PedidosService {
     });
     if (!pedido) throw new NotFoundException('Pedido não encontrado');
 
+    const permitidas = TRANSICOES_VALIDAS[pedido.status];
+    if (!permitidas.includes(status)) {
+      throw new BadRequestException(
+        `Transição inválida: ${pedido.status} → ${status}`,
+      );
+    }
+
     const statusFaturamento: StatusPedido[] = [
       StatusPedido.CONFIRMADO,
       StatusPedido.PREPARANDO,
@@ -245,6 +315,10 @@ export class PedidosService {
       if (jaFaturou) {
         await this.estornarEstoque(pedido.negocioId, pedido, usuarioId);
       }
+    }
+
+    if (status === StatusPedido.CONFIRMADO && pedido.status !== StatusPedido.CONFIRMADO) {
+      this.imprimirService.imprimirComanda(pedido.negocioId, id).catch(() => {});
     }
 
     return this.prisma.pedido.update({
