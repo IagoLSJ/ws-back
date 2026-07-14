@@ -42,11 +42,13 @@ export class ImprimirService {
     });
     if (!pedido || pedido.negocioId !== negocioId) throw new NotFoundException('Pedido não encontrado');
 
+    const statusTraduzido = traduzirStatus(pedido.status);
     const html = gerarComandaHtml({
       numeroPedido: pedido.id.slice(0, 8).toUpperCase(),
       cliente: pedido.contato || undefined,
       tipoEntrega: pedido.tipoEntrega || undefined,
-      endereco: pedido.endereco ? `${(pedido.endereco as any).logradouro || ''}, ${(pedido.endereco as any).bairro || ''}`.trim() : undefined,
+      endereco: pedido.endereco ? formatarEndereco(pedido.endereco as any) : undefined,
+      status: statusTraduzido,
       itens: pedido.itens.map(i => ({
         nome: i.produtoNome,
         quantidade: i.quantidade,
@@ -86,10 +88,12 @@ export class ImprimirService {
     const totalItens = pedido.itens.reduce((s, i) => s + Number(i.precoUnitario) * i.quantidade, 0);
     const taxaFrete = Number(pedido.taxaFrete) || 0;
 
+    const statusTraduzido = traduzirStatus(pedido.status);
     const html = gerarCupomHtml({
       negocioNome: pedido.negocio.nome,
       numeroPedido: pedido.id.slice(0, 8).toUpperCase(),
       cliente: pedido.contato || undefined,
+      status: statusTraduzido,
       itens: pedido.itens.map(i => ({
         nome: i.produtoNome,
         quantidade: i.quantidade,
@@ -102,7 +106,7 @@ export class ImprimirService {
       total: Number(pedido.total),
       formaPagamento: pagamento ? this.traduzirPagamento(pagamento.metodo) : 'N/A',
       tipoEntrega: pedido.tipoEntrega || undefined,
-      endereco: pedido.endereco ? `${(pedido.endereco as any).logradouro || ''}, ${(pedido.endereco as any).bairro || ''}${(pedido.endereco as any).cidade ? ' - ' + (pedido.endereco as any).cidade : ''}`.trim() : undefined,
+      endereco: pedido.endereco ? formatarEndereco(pedido.endereco as any) : undefined,
       observacao: pedido.observacao || undefined,
       criadoEm: new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(pedido.criadoEm),
     });
@@ -129,6 +133,16 @@ export class ImprimirService {
   async obterCupomHtml(negocioId: string, pedidoId: string): Promise<string> {
     const result = await this.imprimirCupom(negocioId, pedidoId);
     return result.html;
+  }
+
+  async obterComandaEscPos(negocioId: string, pedidoId: string): Promise<Buffer> {
+    const { html } = await this.imprimirComanda(negocioId, pedidoId);
+    return this.htmlToEscPos(html);
+  }
+
+  async obterCupomEscPos(negocioId: string, pedidoId: string): Promise<Buffer> {
+    const { html } = await this.imprimirCupom(negocioId, pedidoId);
+    return this.htmlToEscPos(html);
   }
 
   private async enviarParaImpressora(impressoraId: string, html: string): Promise<boolean> {
@@ -171,7 +185,33 @@ export class ImprimirService {
   }
 
   private htmlToEscPos(html: string): Buffer {
-    const text = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
+    let text = html
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<tr[^>]*>/gi, '')
+      .replace(/<\/tr>/gi, '\n')
+      .replace(/<td[^>]*>/gi, '')
+      .replace(/<\/td>/gi, ' ')
+      .replace(/<div[^>]*>/gi, '')
+      .replace(/<\/div>/gi, '\n')
+      .replace(/<span[^>]*>/gi, '')
+      .replace(/<\/span>/gi, '')
+      .replace(/<h1>/gi, '')
+      .replace(/<\/h1>/gi, '\n')
+      .replace(/<h2>/gi, '')
+      .replace(/<\/h2>/gi, '\n')
+      .replace(/<strong>/gi, '')
+      .replace(/<\/strong>/gi, '')
+      .replace(/<hr>/gi, '\n-----------------------------\n')
+      .replace(/<[^>]*>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s*\n\s*/g, '\n')
+      .trim();
+
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const buf: number[] = [];
 
@@ -179,21 +219,23 @@ export class ImprimirService {
     buf.push(0x1B, 0x61, 0x00);
 
     for (const line of lines) {
-      const isCenter = line.length > 0 && line[0] === '☕';
+      const isCenter = line.includes('☕');
       const isBold = line.includes('COMANDA') || line.includes('TOTAL');
 
       if (isCenter) buf.push(0x1B, 0x61, 0x01);
-      if (isBold) { buf.push(0x1B, 0x45, 0x01); }
+      if (isBold) buf.push(0x1B, 0x45, 0x01);
 
-      const encoded = Buffer.from(line.substring(0, 42) + '\n', 'latin1');
-      for (const b of encoded) buf.push(b);
+      const cleanLine = line.replace(/☕/g, '').trim();
+      if (cleanLine) {
+        const encoded = Buffer.from(cleanLine.substring(0, 44) + '\n', 'latin1');
+        for (const b of encoded) buf.push(b);
+      }
 
-      if (isBold) { buf.push(0x1B, 0x45, 0x00); }
+      if (isBold) buf.push(0x1B, 0x45, 0x00);
       if (isCenter) buf.push(0x1B, 0x61, 0x00);
     }
 
     buf.push(0x1B, 0x64, 0x03);
-    buf.push(0x1D, 0x56, 0x41, 0x00);
     return Buffer.from(buf);
   }
 
@@ -207,4 +249,28 @@ export class ImprimirService {
     };
     return mapa[metodo] || metodo;
   }
+}
+
+function formatarEndereco(e: Record<string, any>): string {
+  const parts: string[] = [];
+  if (e.logradouro) parts.push(e.logradouro);
+  if (e.numero) parts.push(e.numero);
+  if (e.complemento) parts.push(e.complemento);
+  if (e.bairro) parts.push(e.bairro);
+  if (e.cidade) parts.push(e.cidade);
+  if (e.estado) parts.push(e.estado);
+  if (e.cep) parts.push(`CEP: ${e.cep}`);
+  return parts.join(', ') || '';
+}
+
+function traduzirStatus(status: string): string {
+  const mapa: Record<string, string> = {
+    PENDENTE: 'Pendente',
+    CONFIRMADO: 'Confirmado',
+    PREPARANDO: 'Preparando',
+    SAIU_PARA_ENTREGA: 'Saiu p/ Entrega',
+    ENTREGUE: 'Entregue',
+    CANCELADO: 'Cancelado',
+  };
+  return mapa[status] || status;
 }

@@ -4,6 +4,7 @@ interface DadosComanda {
   mesa?: string;
   tipoEntrega?: string;
   endereco?: string;
+  status?: string;
   itens: Array<{ nome: string; quantidade: number; modificadores?: string[]; observacao?: string }>;
   observacao?: string;
   criadoEm: string;
@@ -37,7 +38,8 @@ export function gerarComandaHtml(dados: DadosComanda): string {
   <hr>
   <div class="header">
     <strong>Pedido #${dados.numeroPedido}</strong><br>
-    ${dados.cliente ? 'Cliente: ' + dados.cliente + '<br>' : ''}
+    ${dados.status ? 'Status: ' + dados.status + '<br>' : ''}
+    ${dados.cliente ? 'Contato: ' + dados.cliente + '<br>' : ''}
     ${dados.mesa ? 'Mesa: ' + dados.mesa + '<br>' : ''}
     ${dados.tipoEntrega ? 'Tipo: ' + dados.tipoEntrega + '<br>' : ''}
     ${dados.endereco ? 'End: ' + dados.endereco + '<br>' : ''}

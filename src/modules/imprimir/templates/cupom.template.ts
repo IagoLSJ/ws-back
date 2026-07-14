@@ -2,6 +2,7 @@ interface DadosCupom {
   negocioNome: string;
   numeroPedido: string;
   cliente?: string;
+  status?: string;
   itens: Array<{ nome: string; quantidade: number; precoUnitario: number; modificadores?: string[] }>;
   subtotal: number;
   desconto: number;
@@ -49,8 +50,9 @@ export function gerarCupomHtml(dados: DadosCupom): string {
   <hr>
   <div class="header">
     Pedido #${dados.numeroPedido}<br>
+    ${dados.status ? 'Status: ' + dados.status + '<br>' : ''}
     ${dados.criadoEm}<br>
-    ${dados.cliente ? 'Cliente: ' + dados.cliente : ''}
+    ${dados.cliente ? 'Contato: ' + dados.cliente : ''}
   </div>
   <hr>
   <table>${itensHtml}</table>

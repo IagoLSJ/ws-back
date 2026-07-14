@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { RedisService } from '../../infra/cache/redis.service';
+import { ImprimirService } from '../imprimir/imprimir.service';
 import { MetodoPagamento, ProdutoStatus, TipoMensagemWhatsApp } from '@prisma/client';
 
 type EtapaConversa =
@@ -37,6 +38,7 @@ export class ChatbotService {
   constructor(
     private prisma: PrismaService,
     private redis: RedisService,
+    private imprimirService: ImprimirService,
   ) {}
 
   async processar(negocioId: string, slug: string, telefone: string, nome: string | undefined, texto: string): Promise<{ telefone: string; texto: string }> {
@@ -315,6 +317,8 @@ export class ChatbotService {
           },
           include: { itens: true, pagamentos: true },
         });
+
+        this.imprimirService.imprimirComanda(negocioId, pedido.id).catch(() => {});
 
         await this.limparEstado(slug, telefone);
         return {

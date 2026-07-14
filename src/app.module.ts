@@ -21,6 +21,7 @@ import { PdvModule } from './modules/pdv/pdv.module';
 import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { ImprimirModule } from './modules/imprimir/imprimir.module';
+import { QzModule } from './modules/qz/qz.module';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import configuration from './config/configuration';
 
@@ -55,6 +56,7 @@ import configuration from './config/configuration';
     WhatsappModule,
     AuditModule,
     ImprimirModule,
+    QzModule,
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },

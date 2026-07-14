@@ -6,9 +6,10 @@ import { WhatsappAdminService } from './whatsapp-admin.service';
 import { ChatbotService } from './chatbot.service';
 import { CarrinhoModule } from '../carrinho/carrinho.module';
 import { PedidosModule } from '../pedidos/pedidos.module';
+import { ImprimirModule } from '../imprimir/imprimir.module';
 
 @Module({
-  imports: [CarrinhoModule, PedidosModule],
+  imports: [CarrinhoModule, PedidosModule, ImprimirModule],
   controllers: [WhatsappController, WhatsappAdminController],
   providers: [WhatsappService, WhatsappAdminService, ChatbotService],
   exports: [WhatsappService, WhatsappAdminService, ChatbotService],

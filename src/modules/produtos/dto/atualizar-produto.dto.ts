@@ -92,6 +92,11 @@ export class AtualizarProdutoDto {
   @IsString()
   sku?: string;
 
+  @ApiPropertyOptional({ example: '7891234567890' })
+  @IsOptional()
+  @IsString()
+  codigoBarras?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsEnum(ProdutoStatus)

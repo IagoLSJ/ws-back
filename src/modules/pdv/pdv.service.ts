@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { EstoqueService } from '../estoque/estoque.service';
+import { ImprimirService } from '../imprimir/imprimir.service';
 import { FinalizarPdvDto } from './dto/finalizar-pdv.dto';
 import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao } from '@prisma/client';
 import { calcularPrecoFinal } from '../../common/utils/preco';
@@ -20,6 +21,7 @@ export class PdvService {
   constructor(
     private prisma: PrismaService,
     private estoqueService: EstoqueService,
+    private imprimirService: ImprimirService,
   ) {}
 
   async checkout(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string) {
@@ -106,6 +108,8 @@ export class PdvService {
         usuarioId,
       );
     }
+
+    this.imprimirService.imprimirComanda(negocioId, pedido.id).catch(() => {});
 
     return pedido;
   }

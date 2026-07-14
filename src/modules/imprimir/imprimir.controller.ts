@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Res, Header } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Header, StreamableFile } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags, ApiOperation } from '@nestjs/swagger';
 import { ImprimirService } from './imprimir.service';
 import { CriarImpressoraDto } from './dto/criar-impressora.dto';
@@ -8,7 +8,6 @@ import { BusinessAccessGuard } from '../../common/guards/business-access.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RoleNegocio } from '@prisma/client';
-import { Response } from 'express';
 
 @ApiTags('Impressão')
 @ApiBearerAuth()
@@ -83,5 +82,29 @@ export class ImprimirController {
     @Body('impressoraId') impressoraId: string | undefined,
   ) {
     return this.service.imprimirCupom(businessId, pedidoId, impressoraId);
+  }
+
+  @Get('comanda/:pedidoId/escpos')
+  @Roles(RoleNegocio.OPERADOR)
+  @Header('Content-Type', 'application/octet-stream')
+  @Header('Content-Disposition', 'attachment; filename="comanda.bin"')
+  async comandaEscPos(
+    @Param('businessId') businessId: string,
+    @Param('pedidoId') pedidoId: string,
+  ): Promise<StreamableFile> {
+    const buffer = await this.service.obterComandaEscPos(businessId, pedidoId);
+    return new StreamableFile(buffer);
+  }
+
+  @Get('cupom/:pedidoId/escpos')
+  @Roles(RoleNegocio.OPERADOR)
+  @Header('Content-Type', 'application/octet-stream')
+  @Header('Content-Disposition', 'attachment; filename="cupom.bin"')
+  async cupomEscPos(
+    @Param('businessId') businessId: string,
+    @Param('pedidoId') pedidoId: string,
+  ): Promise<StreamableFile> {
+    const buffer = await this.service.obterCupomEscPos(businessId, pedidoId);
+    return new StreamableFile(buffer);
   }
 }

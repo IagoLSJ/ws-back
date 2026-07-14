@@ -257,6 +257,21 @@ export class ProdutosService {
     });
   }
 
+  async buscarPorCodigoBarras(negocioId: string, codigo: string) {
+    const produto = await this.prisma.produto.findFirst({
+      where: { negocioId, codigoBarras: codigo, status: 'ATIVO' },
+      include: {
+        categoria: true,
+        imagens: { orderBy: { ordem: 'asc' } },
+        gruposModificadores: { include: { opcoes: true }, orderBy: { ordem: 'asc' } },
+        estoqueItem: { select: { quantidadeAtual: true, estoqueMinimo: true } },
+      },
+    });
+    if (!produto) throw new NotFoundException('Produto não encontrado para este código');
+    this.normalizeImagens(produto);
+    return produto;
+  }
+
   async deleteImage(negocioId: string, produtoId: string, imagemId: string) {
     await this.findOne(negocioId, produtoId);
 

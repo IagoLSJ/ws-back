@@ -30,6 +30,13 @@ export class ProdutosController {
     return this.service.findAll(negocioId);
   }
 
+  @Get('busca/codigo/:codigo')
+  @Roles(RoleNegocio.OPERADOR)
+  @ApiOperation({ summary: 'Buscar produto por código de barras' })
+  buscarPorCodigo(@Param('businessId') negocioId: string, @Param('codigo') codigo: string) {
+    return this.service.buscarPorCodigoBarras(negocioId, codigo);
+  }
+
   @Get(':prodId')
   @Roles(RoleNegocio.VISUALIZADOR)
   @ApiOperation({ summary: 'Obter produto' })

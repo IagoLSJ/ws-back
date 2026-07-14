@@ -6,8 +6,8 @@ export class CriarImpressoraDto {
   @IsIn(['TERMICA', 'MATRICIAL', 'LASER'])
   tipo!: string;
 
-  @ApiProperty({ enum: ['REDE', 'USB'] })
-  @IsIn(['REDE', 'USB'])
+  @ApiProperty({ enum: ['REDE', 'USB', 'BLUETOOTH'] })
+  @IsIn(['REDE', 'USB', 'BLUETOOTH'])
   conexao!: string;
 
   @ApiPropertyOptional()

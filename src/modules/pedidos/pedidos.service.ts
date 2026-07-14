@@ -245,8 +245,9 @@ export class PedidosService {
       });
       pedido.status = StatusPedido.CONFIRMADO;
       await this.baixarEstoque(negocioId, pedido, usuarioId);
-      this.imprimirService.imprimirComanda(negocioId, pedido.id).catch(() => {});
     }
+
+    this.imprimirService.imprimirComanda(negocioId, pedido.id).catch(() => {});
 
     await this.prisma.carrinhoItem.deleteMany({ where: { carrinhoId: carrinho.id } });
 
@@ -315,10 +316,6 @@ export class PedidosService {
       if (jaFaturou) {
         await this.estornarEstoque(pedido.negocioId, pedido, usuarioId);
       }
-    }
-
-    if (status === StatusPedido.CONFIRMADO && pedido.status !== StatusPedido.CONFIRMADO) {
-      this.imprimirService.imprimirComanda(pedido.negocioId, id).catch(() => {});
     }
 
     return this.prisma.pedido.update({

@@ -219,6 +219,7 @@ model Produto {
   tipoDesconto         String?
   valorDesconto        Decimal?       @db.Decimal(10, 2)
   sku                  String?
+  codigoBarras         String?
   status               ProdutoStatus  @default(ATIVO)
   destaque             Boolean        @default(false)
   ordem                Int            @default(0)
