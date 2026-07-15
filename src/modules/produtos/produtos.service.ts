@@ -43,6 +43,9 @@ export class ProdutosService {
         tipoDesconto: dto.tipoDesconto,
         valorDesconto: dto.valorDesconto,
         sku: dto.sku,
+        codigoBarras: dto.codigoBarras,
+        plu: dto.plu,
+        precoCusto: dto.precoCusto ?? undefined,
         status: 'ATIVO',
         destaque: dto.destaque || false,
         ordem: dto.ordem || 0,
@@ -85,6 +88,7 @@ export class ProdutosService {
           produtoId: produto.id,
           quantidadeAtual: 0,
           estoqueMinimo: config?.estoqueMinimoPadrao ?? 5,
+          precoCusto: dto.precoCusto ?? undefined,
         },
       });
     }
@@ -101,6 +105,23 @@ export class ProdutosService {
         imagens: { orderBy: { ordem: 'asc' } },
         gruposModificadores: { include: { opcoes: true }, orderBy: { ordem: 'asc' } },
         estoqueItem: { select: { quantidadeAtual: true, estoqueMinimo: true } },
+        _count: { select: { pedidoItens: true } },
+      },
+    });
+    for (const p of produtos) this.normalizeImagens(p);
+    return produtos;
+  }
+
+  async findAllPDV() {
+    const produtos = await this.prisma.produto.findMany({
+      where: { status: 'ATIVO' },
+      orderBy: [{ ordem: 'asc' }, { criadoEm: 'desc' }],
+      include: {
+        categoria: true,
+        imagens: { orderBy: { ordem: 'asc' } },
+        gruposModificadores: { include: { opcoes: true }, orderBy: { ordem: 'asc' } },
+        estoqueItem: { select: { quantidadeAtual: true, estoqueMinimo: true } },
+        negocio: { select: { id: true, nome: true } },
         _count: { select: { pedidoItens: true } },
       },
     });
@@ -179,6 +200,12 @@ export class ProdutosService {
     });
 
     this.normalizeImagens(produto);
+    if (dto.precoCusto !== undefined) {
+      await this.prisma.estoqueItem.updateMany({
+        where: { produtoId: id },
+        data: { precoCusto: dto.precoCusto },
+      });
+    }
     await this.invalidateCache(negocioId);
     return produto;
   }
@@ -270,6 +297,55 @@ export class ProdutosService {
     if (!produto) throw new NotFoundException('Produto não encontrado para este código');
     this.normalizeImagens(produto);
     return produto;
+  }
+
+  async buscarPorCodigoBarrasPDV(codigo: string) {
+    const formatoToledo = this.parseToledoBarcode(codigo);
+
+    let produto: any;
+
+    if (formatoToledo) {
+      produto = await this.prisma.produto.findFirst({
+        where: { plu: formatoToledo.plu, status: 'ATIVO' },
+        include: {
+          categoria: true,
+          negocio: { select: { id: true, nome: true } },
+          imagens: { orderBy: { ordem: 'asc' } },
+          gruposModificadores: { include: { opcoes: true }, orderBy: { ordem: 'asc' } },
+          estoqueItem: { select: { quantidadeAtual: true, estoqueMinimo: true } },
+        },
+      });
+      if (produto) {
+        produto = { ...produto, preco: formatoToledo.preco };
+      }
+    } else {
+      produto = await this.prisma.produto.findFirst({
+        where: { codigoBarras: codigo, status: 'ATIVO' },
+        include: {
+          categoria: true,
+          negocio: { select: { id: true, nome: true } },
+          imagens: { orderBy: { ordem: 'asc' } },
+          gruposModificadores: { include: { opcoes: true }, orderBy: { ordem: 'asc' } },
+          estoqueItem: { select: { quantidadeAtual: true, estoqueMinimo: true } },
+        },
+      });
+    }
+
+    if (!produto) throw new NotFoundException('Produto não encontrado para este código');
+    this.normalizeImagens(produto);
+    return produto;
+  }
+
+  private parseToledoBarcode(codigo: string): { plu: number; preco: number } | null {
+    if (!codigo || codigo.length < 13) return null;
+    if (codigo[0] !== '2') return null;
+
+    const plu = parseInt(codigo.substring(1, 6), 10);
+    const precoCentavos = parseInt(codigo.substring(6, 11), 10);
+
+    if (isNaN(plu) || isNaN(precoCentavos)) return null;
+
+    return { plu, preco: precoCentavos / 100 };
   }
 
   async deleteImage(negocioId: string, produtoId: string, imagemId: string) {

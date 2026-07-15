@@ -29,7 +29,7 @@ export class AuditInterceptor implements NestInterceptor {
               userAgent: request.headers['user-agent'],
             },
           })
-          .catch(() => {});
+          .catch((err) => console.error('[AuditInterceptor] Failed to create audit log:', err));
       }),
     );
   }

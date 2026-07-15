@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import * as net from 'net';
-import { gerarComandaHtml } from './templates/comanda.template';
+import { imprimirComanda, gerarComandaHtml } from './templates/comanda.template';
 import { gerarCupomHtml } from './templates/cupom.template';
 import { CriarImpressoraDto } from './dto/criar-impressora.dto';
 import { AtualizarImpressoraDto } from './dto/atualizar-impressora.dto';
@@ -52,7 +52,7 @@ export class ImprimirService {
       itens: pedido.itens.map(i => ({
         nome: i.produtoNome,
         quantidade: i.quantidade,
-        modificadores: i.modificadores ? (Array.isArray(i.modificadores) ? i.modificadores : []) as string[] : undefined,
+        modificadores: extrairModificadores(i.modificadores),
         observacao: undefined,
       })),
       observacao: pedido.observacao || undefined,
@@ -60,13 +60,36 @@ export class ImprimirService {
     });
 
     let enviadoParaRede = false;
+    const dados = {
+      numeroPedido: pedido.id.slice(0, 8).toUpperCase(),
+      cliente: pedido.contato || undefined,
+      tipoEntrega: pedido.tipoEntrega || undefined,
+      endereco: pedido.endereco ? formatarEndereco(pedido.endereco as any) : undefined,
+      status: statusTraduzido,
+      itens: pedido.itens.map(i => ({
+        nome: i.produtoNome,
+        quantidade: i.quantidade,
+        modificadores: extrairModificadores(i.modificadores),
+        observacao: undefined,
+      })),
+      observacao: pedido.observacao || undefined,
+      criadoEm: new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(pedido.criadoEm),
+    };
     if (impressoraId) {
-      enviadoParaRede = await this.enviarParaImpressora(impressoraId, html);
+      const imp = await this.prisma.impressoraConfig.findUnique({ where: { id: impressoraId } });
+      if (imp?.conexao === 'REDE' && imp.enderecoIp) {
+        try {
+          await imprimirComanda(dados, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
+          enviadoParaRede = true;
+        } catch { }
+      }
     } else {
       const impressoras = await this.prisma.impressoraConfig.findMany({ where: { negocioId, ativo: true, conexao: 'REDE' } });
       for (const imp of impressoras) {
-        const ok = await this.enviarTcp(imp.enderecoIp!, imp.porta!, html);
-        if (ok) enviadoParaRede = true;
+        try {
+          await imprimirComanda(dados, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
+          enviadoParaRede = true;
+        } catch { }
       }
     }
 
@@ -79,7 +102,7 @@ export class ImprimirService {
       include: {
         itens: true,
         pagamentos: true,
-        negocio: true,
+        negocio: { include: { configuracoes: true } },
       },
     });
     if (!pedido || pedido.negocioId !== negocioId) throw new NotFoundException('Pedido não encontrado');
@@ -87,28 +110,42 @@ export class ImprimirService {
     const pagamento = pedido.pagamentos[0];
     const totalItens = pedido.itens.reduce((s, i) => s + Number(i.precoUnitario) * i.quantidade, 0);
     const taxaFrete = Number(pedido.taxaFrete) || 0;
+    const config = pedido.negocio.configuracoes;
+    const endEmitente = config?.endereco ? formatarEndereco(config.endereco as any) : undefined;
 
     const statusTraduzido = traduzirStatus(pedido.status);
     const html = gerarCupomHtml({
       negocioNome: pedido.negocio.nome,
+      razaoSocial: config?.razaoSocial || undefined,
+      cnpj: config?.cnpj || undefined,
+      ie: config?.ie || undefined,
+      enderecoEmitente: endEmitente,
       numeroPedido: pedido.id.slice(0, 8).toUpperCase(),
+      numeroNfe: pedido.numeroNfe || undefined,
+      serieNfe: pedido.serieNfe || undefined,
       cliente: pedido.contato || undefined,
+      clienteCpf: pedido.clienteCpf || undefined,
+      clienteNome: pedido.clienteNome || undefined,
       status: statusTraduzido,
       itens: pedido.itens.map(i => ({
         nome: i.produtoNome,
         quantidade: i.quantidade,
         precoUnitario: Number(i.precoUnitario),
-        modificadores: i.modificadores ? (Array.isArray(i.modificadores) ? i.modificadores : []) as string[] : undefined,
+        modificadores: extrairModificadores(i.modificadores),
       })),
       subtotal: totalItens,
       desconto: 0,
       taxaFrete,
       total: Number(pedido.total),
       formaPagamento: pagamento ? this.traduzirPagamento(pagamento.metodo) : 'N/A',
+      troco: pedido.troco ? Number(pedido.troco) : undefined,
       tipoEntrega: pedido.tipoEntrega || undefined,
       endereco: pedido.endereco ? formatarEndereco(pedido.endereco as any) : undefined,
       observacao: pedido.observacao || undefined,
       criadoEm: new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(pedido.criadoEm),
+      chaveAcesso: pedido.chaveAcesso || undefined,
+      qrCodeUrl: pedido.qrCodeUrl || undefined,
+      tributosAproximados: pedido.tributosAproximados ? Number(pedido.tributosAproximados) : undefined,
     });
 
     let enviadoParaRede = false;
@@ -186,6 +223,7 @@ export class ImprimirService {
 
   private htmlToEscPos(html: string): Buffer {
     let text = html
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
       .replace(/<br\s*\/?>/gi, '\n')
       .replace(/<tr[^>]*>/gi, '')
       .replace(/<\/tr>/gi, '\n')
@@ -225,10 +263,16 @@ export class ImprimirService {
       if (isCenter) buf.push(0x1B, 0x61, 0x01);
       if (isBold) buf.push(0x1B, 0x45, 0x01);
 
-      const cleanLine = line.replace(/☕/g, '').trim();
+      const cleanLine = line.replace(/Endereco: |Endereço: /gi, '').replace(/☕/g, '').trim();
       if (cleanLine) {
-        const encoded = Buffer.from(cleanLine.substring(0, 44) + '\n', 'latin1');
-        for (const b of encoded) buf.push(b);
+        const maxLen = 48;
+        const lines = cleanLine.length > maxLen
+          ? [cleanLine.substring(0, maxLen), cleanLine.substring(maxLen)]
+          : [cleanLine];
+        for (const l of lines) {
+          const encoded = Buffer.from(l.trim().substring(0, maxLen) + '\n', 'latin1');
+          for (const b of encoded) buf.push(b);
+        }
       }
 
       if (isBold) buf.push(0x1B, 0x45, 0x00);
@@ -251,9 +295,15 @@ export class ImprimirService {
   }
 }
 
+function extrairModificadores(modificadores: unknown): string[] | undefined {
+  if (!modificadores) return undefined;
+  const arr = Array.isArray(modificadores) ? modificadores : [];
+  return arr.map((m: any) => (typeof m === 'string' ? m : m.nome ?? m.opcaoNome ?? ''));
+}
+
 function formatarEndereco(e: Record<string, any>): string {
   const parts: string[] = [];
-  if (e.logradouro) parts.push(e.logradouro);
+  if (e.logradouro || e.rua) parts.push(e.logradouro || e.rua);
   if (e.numero) parts.push(e.numero);
   if (e.complemento) parts.push(e.complemento);
   if (e.bairro) parts.push(e.bairro);

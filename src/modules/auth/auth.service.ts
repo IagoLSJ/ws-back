@@ -127,7 +127,7 @@ export class AuthService {
       .create({
         data: { usuarioId, acao, ip, userAgent },
       })
-      .catch(() => {});
+      .catch((err) => console.error('[AuthService] Failed to log audit:', err));
   }
 
   async recuperarSenha(dto: RecuperarSenhaDto) {

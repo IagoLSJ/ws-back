@@ -97,6 +97,17 @@ export class AtualizarProdutoDto {
   @IsString()
   codigoBarras?: string;
 
+  @ApiPropertyOptional({ example: 12345 })
+  @IsOptional()
+  @IsNumber()
+  plu?: number;
+
+  @ApiPropertyOptional({ example: 15.50 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  precoCusto?: number;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsEnum(ProdutoStatus)

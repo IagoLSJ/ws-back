@@ -1,10 +1,12 @@
-import { Controller, Post, Body, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpException, HttpStatus, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
 @ApiTags('QZ Tray')
+@UseGuards(JwtAuthGuard)
 @Controller('qz')
 export class QzController {
   private privateKey: string;

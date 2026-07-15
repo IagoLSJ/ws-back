@@ -39,6 +39,12 @@ class ItemPdvDto {
   @ValidateNested()
   @Type(() => DescontoDto)
   desconto?: DescontoDto;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  opcoesSelecionadas?: string[];
 }
 
 class PagamentoPdvDto {
@@ -80,4 +86,14 @@ export class FinalizarPdvDto {
   @IsOptional()
   @IsString()
   agendadoPara?: string;
+
+  @ApiPropertyOptional({ example: '123.456.789-00' })
+  @IsOptional()
+  @IsString()
+  clienteCpf?: string;
+
+  @ApiPropertyOptional({ example: 'João Silva' })
+  @IsOptional()
+  @IsString()
+  clienteNome?: string;
 }

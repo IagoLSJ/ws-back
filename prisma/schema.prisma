@@ -135,6 +135,9 @@ model ConfiguracaoNegocio {
   chatbotAtivo          Boolean   @default(true)
   mensagemBoasVindas    String?
   mensagemFallback      String?
+  cnpj                  String?
+  ie                    String?
+  razaoSocial           String?
 
   negocio Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
 
@@ -161,7 +164,7 @@ model ImpressoraConfig {
   id            String   @id @default(uuid())
   negocioId     String
   tipo          String   @default("TERMICA")
-  conexao       String   @default("REDE")
+  conexao       String   @default("USB")
   enderecoIp    String?
   porta         Int      @default(9100)
   papelLargura  Int      @default(80)
@@ -220,6 +223,8 @@ model Produto {
   valorDesconto        Decimal?       @db.Decimal(10, 2)
   sku                  String?
   codigoBarras         String?
+  plu                  Int?
+  precoCusto           Decimal?       @db.Decimal(10, 2)
   status               ProdutoStatus  @default(ATIVO)
   destaque             Boolean        @default(false)
   ordem                Int            @default(0)
@@ -235,6 +240,7 @@ model Produto {
   carrinhoItens        CarrinhoItem[]
   pedidoItens          PedidoItem[]
 
+  @@unique([negocioId, plu])
   @@index([negocioId, status])
   @@index([negocioId, categoriaId])
   @@map("produtos")
@@ -432,9 +438,17 @@ model Pedido {
   observacao     String?
   endereco       Json?        @db.Json
   contato        String?
-  agendadoPara   DateTime?
-  criadoEm       DateTime     @default(now())
-  atualizadoEm   DateTime     @updatedAt
+  agendadoPara        DateTime?
+  clienteCpf          String?
+  clienteNome         String?
+  chaveAcesso         String?
+  qrCodeUrl           String?
+  numeroNfe           String?
+  serieNfe            String?
+  tributosAproximados Decimal?   @db.Decimal(10, 2)
+  troco               Decimal?   @db.Decimal(10, 2)
+  criadoEm            DateTime   @default(now())
+  atualizadoEm        DateTime   @updatedAt
 
   negocio    Negocio      @relation(fields: [negocioId], references: [id])
   usuario    Usuario?     @relation(fields: [usuarioId], references: [id])
