@@ -31,7 +31,7 @@ class ItemPdvDto {
   @ApiPropertyOptional({ default: 1 })
   @IsOptional()
   @IsNumber()
-  @Min(1)
+  @Min(0)
   quantidade?: number;
 
   @ApiPropertyOptional()

@@ -20,16 +20,16 @@ export function gerarComandaHtml(dados: DadosComanda): string {
   const itensHtml = dados.itens
     .map((i) => {
       const modificadoresHtml = i.modificadores?.length
-        ? `<br><span style="font-size:11px;color:#666">${escapeHtml(i.modificadores.join(', '))}</span>`
+        ? `<br><span style="font-size:16px;color:#333">${escapeHtml(i.modificadores.join(', '))}</span>`
         : '';
       const observacaoHtml = i.observacao
-        ? `<br><span style="font-size:11px;color:#e11d48">Obs: ${escapeHtml(i.observacao)}</span>`
+        ? `<br><span style="font-size:16px;color:#e11d48">Obs: ${escapeHtml(i.observacao)}</span>`
         : '';
 
       return `
     <tr>
-      <td style="font-size:14px;font-weight:bold;padding:4px 0;vertical-align:top">${i.quantidade}x</td>
-      <td style="font-size:14px;padding:4px 0 4px 6px">
+      <td style="font-size:18px;font-weight:bold;padding:4px 0;vertical-align:top">${i.quantidade}x</td>
+      <td style="font-size:18px;font-weight:bold;padding:4px 0 4px 6px">
         ${escapeHtml(i.nome)}
         ${modificadoresHtml}
         ${observacaoHtml}
@@ -56,10 +56,10 @@ export function gerarComandaHtml(dados: DadosComanda): string {
 <style>
   @page { margin: 0; size: 80mm auto; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Courier New', monospace; font-size: 12px; padding: 8mm 4mm; color: #000; }
+  body { font-family: 'Courier New', monospace; font-size: 16px; padding: 8mm 4mm; color: #000; }
   h1 { text-align: center; font-size: 18px; margin-bottom: 4px; letter-spacing: 2px; }
   hr { border: none; border-top: 1px dashed #000; margin: 6px 0; }
-  .header { text-align: center; margin-bottom: 8px; font-size: 11px; }
+  .header { text-align: center; margin-bottom: 8px; font-size: 16px; }
   table { width: 100%; border-collapse: collapse; }
   .obs { margin-top: 8px; font-size: 11px; color: #e11d48; font-style: italic; }
   .footer { text-align: center; margin-top: 12px; font-size: 10px; border-top: 1px dashed #000; padding-top: 6px; }

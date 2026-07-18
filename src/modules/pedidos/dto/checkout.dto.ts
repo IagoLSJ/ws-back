@@ -50,9 +50,9 @@ export class EnderecoEntregaDto {
 }
 
 export class CheckoutDto {
-  @ApiProperty({ enum: ['RETIRADA', 'ENTREGA'], example: 'ENTREGA' })
+  @ApiProperty({ enum: ['ENTREGA', 'RETIRADA', 'MESA'], example: 'ENTREGA' })
   @IsString()
-  tipoEntrega!: 'RETIRADA' | 'ENTREGA';
+  tipoEntrega!: 'ENTREGA' | 'RETIRADA' | 'MESA';
 
   @ApiPropertyOptional({ example: 'Deixar na portaria' })
   @IsOptional()
@@ -86,4 +86,9 @@ export class CheckoutDto {
   @IsOptional()
   @IsString()
   agendadoPara?: string;
+
+  @ApiPropertyOptional({ example: 'uuid-da-mesa' })
+  @IsOptional()
+  @IsString()
+  mesaId?: string;
 }

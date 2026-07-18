@@ -23,6 +23,8 @@ import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { ImprimirModule } from './modules/imprimir/imprimir.module';
 import { QzModule } from './modules/qz/qz.module';
+import { CaixaModule } from './modules/caixa/caixa.module';
+import { MesasModule } from './modules/mesas/mesas.module';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import configuration from './config/configuration';
 
@@ -58,6 +60,8 @@ import configuration from './config/configuration';
     AuditModule,
     ImprimirModule,
     QzModule,
+    CaixaModule,
+    MesasModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

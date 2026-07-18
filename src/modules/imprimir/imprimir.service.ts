@@ -38,20 +38,24 @@ export class ImprimirService {
       include: {
         itens: true,
         negocio: true,
+        mesa: { select: { numero: true } },
       },
     });
     if (!pedido || pedido.negocioId !== negocioId) throw new NotFoundException('Pedido não encontrado');
+
+    const mesaNumero = pedido.mesa?.numero?.toString();
 
     const statusTraduzido = traduzirStatus(pedido.status);
     const html = gerarComandaHtml({
       numeroPedido: pedido.id.slice(0, 8).toUpperCase(),
       cliente: pedido.contato || undefined,
+      mesa: mesaNumero,
       tipoEntrega: pedido.tipoEntrega || undefined,
       endereco: pedido.endereco ? formatarEndereco(pedido.endereco as any) : undefined,
       status: statusTraduzido,
       itens: pedido.itens.map(i => ({
         nome: i.produtoNome,
-        quantidade: i.quantidade,
+        quantidade: Number(i.quantidade),
         modificadores: extrairModificadores(i.modificadores),
         observacao: undefined,
       })),
@@ -63,12 +67,13 @@ export class ImprimirService {
     const dados = {
       numeroPedido: pedido.id.slice(0, 8).toUpperCase(),
       cliente: pedido.contato || undefined,
+      mesa: mesaNumero,
       tipoEntrega: pedido.tipoEntrega || undefined,
       endereco: pedido.endereco ? formatarEndereco(pedido.endereco as any) : undefined,
       status: statusTraduzido,
       itens: pedido.itens.map(i => ({
         nome: i.produtoNome,
-        quantidade: i.quantidade,
+        quantidade: Number(i.quantidade),
         modificadores: extrairModificadores(i.modificadores),
         observacao: undefined,
       })),
@@ -81,16 +86,33 @@ export class ImprimirService {
         try {
           await imprimirComanda(dados, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
           enviadoParaRede = true;
-        } catch { }
+        } catch (err) {
+          this.logger.error(`Erro ao imprimir comanda na impressora ${imp.id}: ${err}`);
+        }
+      } else if (imp) {
+        this.logger.warn(`Impressora ${imp.id} é ${imp.conexao} - backend só suporta REDE. A impressão deve ser feita pelo frontend (QZ Tray/WebUSB).`);
       }
     } else {
-      const impressoras = await this.prisma.impressoraConfig.findMany({ where: { negocioId, ativo: true, conexao: 'REDE' } });
-      for (const imp of impressoras) {
-        try {
-          await imprimirComanda(dados, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
-          enviadoParaRede = true;
-        } catch { }
+      const impressoras = await this.prisma.impressoraConfig.findMany({ where: { negocioId, ativo: true } });
+      if (!impressoras.length) {
+        this.logger.warn(`Nenhuma impressora ativa configurada para o negócio ${negocioId}`);
       }
+      for (const imp of impressoras) {
+        if (imp.conexao === 'REDE' && imp.enderecoIp) {
+          try {
+            await imprimirComanda(dados, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
+            enviadoParaRede = true;
+          } catch (err) {
+            this.logger.error(`Erro ao imprimir comanda na impressora ${imp.id} (${imp.enderecoIp}:${imp.porta}): ${err}`);
+          }
+        } else if (imp.conexao !== 'REDE') {
+          this.logger.warn(`Impressora ${imp.id} é ${imp.conexao} - ignorada pelo backend (necessário QZ Tray no frontend para impressão)`);
+        }
+      }
+    }
+
+    if (!enviadoParaRede) {
+      this.logger.log(`Comanda do pedido ${pedidoId} não foi enviada para nenhuma impressora REDE. Aguardando frontend via QZ Tray/WebUSB...`);
     }
 
     return { html, enviadoParaRede };
@@ -108,7 +130,7 @@ export class ImprimirService {
     if (!pedido || pedido.negocioId !== negocioId) throw new NotFoundException('Pedido não encontrado');
 
     const pagamento = pedido.pagamentos[0];
-    const totalItens = pedido.itens.reduce((s, i) => s + Number(i.precoUnitario) * i.quantidade, 0);
+    const totalItens = pedido.itens.reduce((s, i) => s + Number(i.precoUnitario) * Number(i.quantidade), 0);
     const taxaFrete = Number(pedido.taxaFrete) || 0;
     const config = pedido.negocio.configuracoes;
     const endEmitente = config?.endereco ? formatarEndereco(config.endereco as any) : undefined;
@@ -129,7 +151,7 @@ export class ImprimirService {
       status: statusTraduzido,
       itens: pedido.itens.map(i => ({
         nome: i.produtoNome,
-        quantidade: i.quantidade,
+        quantidade: Number(i.quantidade),
         precoUnitario: Number(i.precoUnitario),
         modificadores: extrairModificadores(i.modificadores),
       })),

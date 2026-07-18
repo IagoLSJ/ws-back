@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { CheckoutDto } from './dto/checkout.dto';
 import { EstoqueService } from '../estoque/estoque.service';
 import { ImprimirService } from '../imprimir/imprimir.service';
-import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao } from '@prisma/client';
+import { CaixaService } from '../caixa/caixa.service';
+import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao, TipoEntrega } from '@prisma/client';
 import { calcularPrecoFinal } from '../../common/utils/preco';
 
 const TRANSICOES_VALIDAS: Record<StatusPedido, StatusPedido[]> = {
@@ -18,10 +19,13 @@ const TRANSICOES_VALIDAS: Record<StatusPedido, StatusPedido[]> = {
 
 @Injectable()
 export class PedidosService {
+  private readonly logger = new Logger(PedidosService.name);
+
   constructor(
     private prisma: PrismaService,
     private estoqueService: EstoqueService,
     private imprimirService: ImprimirService,
+    private caixaService: CaixaService,
   ) {}
 
   private async resolveNegocioId(slug: string): Promise<string> {
@@ -44,9 +48,9 @@ export class PedidosService {
     for (const item of pedido.itens) {
       const estoqueItem = await this.prisma.estoqueItem.findFirst({
         where: { negocioId, produtoId: item.produtoId },
-        include: { produto: { select: { controlaEstoque: true } } },
+        include: { produto: { select: { controlaEstoque: true, vendaPorPeso: true } } },
       });
-      if (!estoqueItem || !estoqueItem.produto?.controlaEstoque) continue;
+      if (!estoqueItem || !estoqueItem.produto?.controlaEstoque || estoqueItem.produto.vendaPorPeso) continue;
 
       const jaBaixado = await this.prisma.movimentacaoEstoque.findFirst({
         where: {
@@ -115,6 +119,7 @@ export class PedidosService {
                 tipoDesconto: true,
                 valorDesconto: true,
                 controlaEstoque: true,
+                vendaPorPeso: true,
               },
             },
             opcoesSelecionadas: { include: { opcao: true } },
@@ -152,11 +157,11 @@ export class PedidosService {
     }
 
     for (const item of carrinho.itens) {
-      if (!item.produto.controlaEstoque) continue;
+      if (!item.produto.controlaEstoque || item.produto.vendaPorPeso) continue;
       const estoqueItem = await this.prisma.estoqueItem.findFirst({
         where: { negocioId, produtoId: item.produto.id },
       });
-      if (!estoqueItem || estoqueItem.quantidadeAtual < item.quantidade) {
+      if (!estoqueItem || estoqueItem.quantidadeAtual < Number(item.quantidade)) {
         throw new BadRequestException(`Estoque insuficiente para "${item.produto.nome}"`);
       }
     }
@@ -180,7 +185,19 @@ export class PedidosService {
       };
     });
 
-    const totalProdutos = itensData.reduce((acc, i) => acc + i.precoUnitario * i.quantidade, 0);
+    const totalProdutos = itensData.reduce((acc, i) => acc + i.precoUnitario * Number(i.quantidade), 0);
+
+    let mesaData: { mesaId?: string; mesaNumero?: number } = {};
+    if (dto.tipoEntrega === 'MESA' && !dto.mesaId) {
+      throw new BadRequestException('mesaId é obrigatório para tipoEntrega MESA');
+    }
+    if (dto.mesaId) {
+      const mesa = await this.prisma.mesa.findFirst({
+        where: { id: dto.mesaId, negocioId, ativa: true },
+      });
+      if (!mesa) throw new BadRequestException('Mesa inválida ou inativa');
+      mesaData = { mesaId: mesa.id, mesaNumero: mesa.numero };
+    }
 
     let taxaFrete = 0;
     if (dto.tipoEntrega === 'ENTREGA') {
@@ -206,10 +223,10 @@ export class PedidosService {
         usuarioId,
         status: StatusPedido.PENDENTE,
         total: valorTotal,
-        tipoEntrega: dto.tipoEntrega,
-        taxaFrete: taxaFrete > 0 ? taxaFrete : undefined,
+        tipoEntrega: mesaData.mesaId ? TipoEntrega.MESA : dto.tipoEntrega as TipoEntrega,
+        taxaFrete: mesaData.mesaId ? 0 : (taxaFrete > 0 ? taxaFrete : undefined),
         observacao: dto.observacao,
-        endereco: dto.enderecoEntrega ? JSON.parse(JSON.stringify(dto.enderecoEntrega)) : undefined,
+        endereco: mesaData.mesaId ? undefined : (dto.enderecoEntrega ? JSON.parse(JSON.stringify(dto.enderecoEntrega)) : undefined),
         contato: dto.contato,
         agendadoPara: dto.agendadoPara
           ? (() => {
@@ -223,6 +240,7 @@ export class PedidosService {
               return data;
             })()
           : undefined,
+        ...mesaData,
         itens: { create: itensData },
         pagamentos: {
           create: {
@@ -239,15 +257,19 @@ export class PedidosService {
     });
 
     if (dto.metodoPagamento === MetodoPagamento.DINHEIRO) {
+      await this.caixaService.exigirCaixaAberto(negocioId);
       await this.prisma.pedido.update({
         where: { id: pedido.id },
         data: { status: StatusPedido.CONFIRMADO },
       });
       pedido.status = StatusPedido.CONFIRMADO;
       await this.baixarEstoque(negocioId, pedido, usuarioId);
+      await this.caixaService.registrarPagamento(negocioId, pedido.id, valorTotal, 'DINHEIRO');
     }
 
-    this.imprimirService.imprimirComanda(negocioId, pedido.id).catch(() => {});
+    this.imprimirService.imprimirComanda(negocioId, pedido.id).catch((err) => {
+      this.logger.error(`Erro ao imprimir comanda automaticamente para pedido ${pedido.id}: ${err}`);
+    });
 
     await this.prisma.carrinhoItem.deleteMany({ where: { carrinhoId: carrinho.id } });
 
@@ -321,6 +343,95 @@ export class PedidosService {
     return this.prisma.pedido.update({
       where: { id },
       data: { status },
+      include: { itens: true, pagamentos: true },
+    });
+  }
+
+  async confirmarPagamento(id: string, usuarioId?: string) {
+    const pedido = await this.prisma.pedido.findUnique({
+      where: { id },
+      include: {
+        itens: true,
+        pagamentos: true,
+      },
+    });
+    if (!pedido) throw new NotFoundException('Pedido não encontrado');
+
+    const pagamentoPendente = pedido.pagamentos.find(
+      (p) => p.status === StatusPagamento.PENDENTE,
+    );
+    if (!pagamentoPendente) {
+      throw new BadRequestException('Nenhum pagamento pendente para confirmar');
+    }
+
+    await this.caixaService.exigirCaixaAberto(pedido.negocioId);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.pagamento.update({
+        where: { id: pagamentoPendente.id },
+        data: { status: StatusPagamento.APROVADO },
+      });
+
+      if (pedido.status === StatusPedido.PENDENTE) {
+        await tx.pedido.update({
+          where: { id },
+          data: { status: StatusPedido.CONFIRMADO },
+        });
+      }
+
+      if (!pedido.itens.length) return;
+
+      const estoqueItens = await tx.estoqueItem.findMany({
+        where: {
+          negocioId: pedido.negocioId,
+          produtoId: { in: pedido.itens.map((i) => i.produtoId) },
+        },
+        include: { produto: { select: { controlaEstoque: true, vendaPorPeso: true } } },
+      });
+
+      for (const item of pedido.itens) {
+        const estoqueItem = estoqueItens.find((e) => e.produtoId === item.produtoId);
+        if (!estoqueItem || !estoqueItem.produto?.controlaEstoque || estoqueItem.produto.vendaPorPeso) continue;
+
+        const jaBaixado = await tx.movimentacaoEstoque.findFirst({
+          where: {
+            estoqueItemId: estoqueItem.id,
+            tipo: TipoMovimentacao.SAIDA_VENDA,
+            referencia: pedido.id,
+          },
+        });
+        if (jaBaixado) continue;
+
+        await tx.estoqueItem.update({
+          where: { id: estoqueItem.id },
+          data: { quantidadeAtual: { decrement: Number(item.quantidade) } },
+        });
+
+        await tx.movimentacaoEstoque.create({
+          data: {
+            negocioId: pedido.negocioId,
+            estoqueItemId: estoqueItem.id,
+            usuarioId,
+            tipo: TipoMovimentacao.SAIDA_VENDA,
+            quantidade: Number(item.quantidade),
+            quantidadeAntes: estoqueItem.quantidadeAtual,
+            quantidadeApos: estoqueItem.quantidadeAtual - Number(item.quantidade),
+            motivo: `Confirmação pagamento #${pedido.id.slice(0, 8)}`,
+            referencia: pedido.id,
+          },
+        });
+      }
+    });
+
+    await this.caixaService.registrarPagamento(
+      pedido.negocioId,
+      pedido.id,
+      Number(pedido.total),
+      pagamentoPendente.metodo,
+    );
+
+    return this.prisma.pedido.findUnique({
+      where: { id },
       include: { itens: true, pagamentos: true },
     });
   }

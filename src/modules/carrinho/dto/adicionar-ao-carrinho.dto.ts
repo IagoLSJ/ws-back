@@ -17,7 +17,7 @@ export class AdicionarAoCarrinhoDto {
   @ApiPropertyOptional({ example: 2 })
   @IsOptional()
   @IsNumber()
-  @Min(1)
+  @Min(0.001)
   quantidade?: number;
 
   @ApiPropertyOptional({ example: 'Sem cebola' })
@@ -30,4 +30,9 @@ export class AdicionarAoCarrinhoDto {
   @IsArray()
   @IsString({ each: true })
   opcoesSelecionadas?: string[];
+
+  @ApiPropertyOptional({ example: 'uuid-da-mesa' })
+  @IsOptional()
+  @IsString()
+  mesaId?: string;
 }

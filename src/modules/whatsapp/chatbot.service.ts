@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { RedisService } from '../../infra/cache/redis.service';
 import { ImprimirService } from '../imprimir/imprimir.service';
-import { MetodoPagamento, ProdutoStatus, TipoMensagemWhatsApp } from '@prisma/client';
+import { MetodoPagamento, ProdutoStatus, TipoMensagemWhatsApp, TipoEntrega } from '@prisma/client';
 
 type EtapaConversa =
   | 'NOVO'
@@ -295,7 +295,7 @@ export class ChatbotService {
             sessionId: cliente.sessionId,
             status: 'CONFIRMADO',
             total: totalItens,
-            tipoEntrega: estado.dados.tipoEntrega ?? 'ENTREGA',
+            tipoEntrega: (estado.dados.tipoEntrega as TipoEntrega) ?? TipoEntrega.ENTREGA,
             endereco: estado.dados.endereco,
             contato: telefone,
             itens: {

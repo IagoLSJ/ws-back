@@ -127,6 +127,11 @@ export class CriarProdutoDto {
   @IsBoolean()
   controlaEstoque?: boolean;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  vendaPorPeso?: boolean;
+
   @ApiPropertyOptional({ type: [GrupoModificadorDto] })
   @IsOptional()
   @IsArray()

@@ -61,6 +61,26 @@ enum StatusPagamento {
   ESTORNADO
 }
 
+enum TipoMovimentoCaixa {
+  ABERTURA
+  FECHAMENTO
+  SANGRIA
+  SUPRIMENTO
+  PAGAMENTO
+}
+
+enum TipoNegocio {
+  VAREJO
+  COMIDA
+  SERVICO
+}
+
+enum TipoEntrega {
+  ENTREGA
+  RETIRADA
+  MESA
+}
+
 model Usuario {
   id            String   @id @default(uuid())
   nome          String
@@ -77,6 +97,8 @@ model Usuario {
   pedidos        Pedido[]
   carrinhos      Carrinho[]
   auditLogs      AuditLog[]
+  caixasAbertura   Caixa[]        @relation("CaixaAbertura")
+  caixasFechamento Caixa[]        @relation("CaixaFechamento")
 
   @@map("usuarios")
 }
@@ -95,16 +117,17 @@ model RefreshToken {
 }
 
 model Negocio {
-  id            String   @id @default(uuid())
+  id            String      @id @default(uuid())
   nome          String
-  slug          String   @unique
+  slug          String      @unique
   descricao     String?
   logoUrl       String?
   bannerUrl     String?
   corPrimaria   String?
-  ativo         Boolean  @default(true)
-  criadoEm      DateTime @default(now())
-  atualizadoEm  DateTime @updatedAt
+  tipo          TipoNegocio @default(VAREJO)
+  ativo         Boolean     @default(true)
+  criadoEm      DateTime    @default(now())
+  atualizadoEm  DateTime    @updatedAt
 
   membros           MembroNegocio[]
   categorias        Categoria[]
@@ -117,6 +140,8 @@ model Negocio {
   configuracoes     ConfiguracaoNegocio?
   taxasFreteBairro  TaxaFreteBairro[]
   impressoras       ImpressoraConfig[]
+  caixas            Caixa[]
+  mesas             Mesa[]
 
   @@map("negocios")
 }
@@ -178,6 +203,73 @@ model ImpressoraConfig {
   @@map("impressoras_config")
 }
 
+model Caixa {
+  id                    String   @id @default(uuid())
+  negocioId             String
+  usuarioAberturaId     String
+  usuarioFechamentoId   String?
+  saldoInicial          Decimal  @default(0) @db.Decimal(10, 2)
+  saldoFinal            Decimal? @db.Decimal(10, 2)
+  totalTroco            Decimal  @default(0) @db.Decimal(10, 2)
+  totalVendas           Decimal  @default(0) @db.Decimal(10, 2)
+  totalDinheiro         Decimal  @default(0) @db.Decimal(10, 2)
+  totalDebito           Decimal  @default(0) @db.Decimal(10, 2)
+  totalCredito          Decimal  @default(0) @db.Decimal(10, 2)
+  totalPix              Decimal  @default(0) @db.Decimal(10, 2)
+  totalOutros           Decimal  @default(0) @db.Decimal(10, 2)
+  totalSangrias         Decimal  @default(0) @db.Decimal(10, 2)
+  totalSuprimentos      Decimal  @default(0) @db.Decimal(10, 2)
+  dataAbertura          DateTime @default(now())
+  dataFechamento        DateTime?
+  status                String   @default("ABERTO")
+  observacao            String?
+
+  negocio           Negocio           @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  usuarioAbertura   Usuario           @relation("CaixaAbertura", fields: [usuarioAberturaId], references: [id])
+  usuarioFechamento Usuario?          @relation("CaixaFechamento", fields: [usuarioFechamentoId], references: [id])
+  movimentos        CaixaMovimento[]
+
+  @@index([negocioId, status])
+  @@map("caixas")
+}
+
+model CaixaMovimento {
+  id              String             @id @default(uuid())
+  caixaId         String
+  tipo            TipoMovimentoCaixa
+  valor           Decimal            @db.Decimal(10, 2)
+  formaPagamento  String?
+  pedidoId        String?
+  descricao       String?
+  criadoEm        DateTime           @default(now())
+
+  caixa Caixa @relation(fields: [caixaId], references: [id], onDelete: Cascade)
+
+  @@index([caixaId])
+  @@map("caixa_movimentos")
+}
+
+model Mesa {
+  id           String   @id @default(uuid())
+  negocioId    String
+  numero       Int
+  nome         String?
+  status       String   @default("LIVRE")
+  ativa        Boolean  @default(true)
+  sessionId    String?
+  qrCodeToken  String   @unique
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  negocio  Negocio    @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  pedidos  Pedido[]
+  carrinhos Carrinho[]
+
+  @@unique([negocioId, numero])
+  @@index([negocioId, status])
+  @@map("mesas")
+}
+
 model MembroNegocio {
   id         String       @id @default(uuid())
   usuarioId  String
@@ -229,6 +321,8 @@ model Produto {
   destaque             Boolean        @default(false)
   ordem                Int            @default(0)
   controlaEstoque      Boolean        @default(true)
+  vendaPorPeso         Boolean        @default(false)
+  unidadeMedida        String         @default("un")
   criadoEm             DateTime       @default(now())
   atualizadoEm         DateTime       @updatedAt
 
@@ -386,11 +480,13 @@ model Carrinho {
   negocioId  String
   sessionId  String
   usuarioId  String?
+  mesaId     String?
   criadoEm   DateTime @default(now())
   atualizadoEm DateTime @updatedAt
 
   negocio    Negocio       @relation(fields: [negocioId], references: [id], onDelete: Cascade)
   usuario    Usuario?      @relation(fields: [usuarioId], references: [id])
+  mesa       Mesa?         @relation(fields: [mesaId], references: [id], onDelete: SetNull)
   itens      CarrinhoItem[]
 
   @@unique([negocioId, sessionId])
@@ -402,7 +498,7 @@ model CarrinhoItem {
   id         String   @id @default(uuid())
   carrinhoId String
   produtoId  String
-  quantidade Int      @default(1)
+  quantidade Decimal  @default(1) @db.Decimal(10, 3)
   observacao String?
   criadoEm   DateTime @default(now())
 
@@ -433,7 +529,7 @@ model Pedido {
   usuarioId      String?
   status         StatusPedido @default(PENDENTE)
   total          Decimal      @db.Decimal(10, 2)
-  tipoEntrega    String?      @default("ENTREGA")
+  tipoEntrega    TipoEntrega  @default(ENTREGA)
   taxaFrete      Decimal?     @db.Decimal(10, 2)
   observacao     String?
   endereco       Json?        @db.Json
@@ -447,16 +543,20 @@ model Pedido {
   serieNfe            String?
   tributosAproximados Decimal?   @db.Decimal(10, 2)
   troco               Decimal?   @db.Decimal(10, 2)
+  mesaId              String?
+  mesaNumero          Int?
   criadoEm            DateTime   @default(now())
   atualizadoEm        DateTime   @updatedAt
 
   negocio    Negocio      @relation(fields: [negocioId], references: [id])
   usuario    Usuario?     @relation(fields: [usuarioId], references: [id])
+  mesa       Mesa?        @relation(fields: [mesaId], references: [id], onDelete: SetNull)
   itens      PedidoItem[]
   pagamentos Pagamento[]
 
   @@index([negocioId, criadoEm])
   @@index([sessionId])
+  @@index([mesaId])
   @@map("pedidos")
 }
 
@@ -466,7 +566,7 @@ model PedidoItem {
   produtoId       String
   produtoNome     String
   precoUnitario   Decimal  @db.Decimal(10, 2)
-  quantidade      Int      @default(1)
+  quantidade      Decimal  @default(1) @db.Decimal(10, 3)
   modificadores   Json?    @db.Json
   criadoEm        DateTime @default(now())
 

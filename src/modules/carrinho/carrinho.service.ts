@@ -22,7 +22,7 @@ export class CarrinhoService {
     return byId.id;
   }
 
-  private async obterOuCriarCarrinho(negocioId: string, sessionId: string, usuarioId?: string) {
+  private async obterOuCriarCarrinho(negocioId: string, sessionId: string, usuarioId?: string, mesaId?: string) {
     let carrinho = await this.prisma.carrinho.findUnique({
       where: { negocioId_sessionId: { negocioId, sessionId } },
       include: {
@@ -32,7 +32,7 @@ export class CarrinhoService {
 
     if (!carrinho) {
       carrinho = await this.prisma.carrinho.create({
-        data: { negocioId, sessionId, usuarioId },
+        data: { negocioId, sessionId, usuarioId, mesaId },
         include: {
           itens: { include: { produto: true, opcoesSelecionadas: { include: { opcao: true } } } },
         },
@@ -68,7 +68,7 @@ export class CarrinhoService {
         (s, o) => s + Number(o.opcao.precoExtra),
         0,
       );
-      return acc + (precoBase + extraOpcoes) * item.quantidade;
+      return acc + (precoBase + extraOpcoes) * Number(item.quantidade);
     }, 0);
 
     return { itens, total: Math.round(total * 100) / 100 };
@@ -87,7 +87,20 @@ export class CarrinhoService {
     });
     if (!produto) throw new NotFoundException('Produto não encontrado ou inativo');
 
-    const carrinho = await this.obterOuCriarCarrinho(negocioId, sessionId, usuarioId);
+    if (produto.vendaPorPeso) {
+      if (!dto.quantidade) {
+        throw new BadRequestException('Informe o peso em kg para produtos vendidos por peso');
+      }
+      if (dto.quantidade > 50) {
+        throw new BadRequestException('Peso máximo por item é 50 kg');
+      }
+    } else {
+      if (dto.quantidade !== undefined && dto.quantidade < 1) {
+        throw new BadRequestException('Quantidade mínima é 1');
+      }
+    }
+
+    const carrinho = await this.obterOuCriarCarrinho(negocioId, sessionId, usuarioId, dto.mesaId);
 
     if (dto.opcoesSelecionadas?.length) {
       const opcoes = await this.prisma.opcaoModificador.findMany({
@@ -147,12 +160,20 @@ export class CarrinhoService {
 
     const item = await this.prisma.carrinhoItem.findFirst({
       where: { id: itemId, carrinhoId: carrinho.id },
+      include: { produto: { select: { vendaPorPeso: true, nome: true } } },
     });
     if (!item) throw new NotFoundException('Item não encontrado no carrinho');
 
     if (quantidade <= 0) {
       await this.prisma.carrinhoItem.delete({ where: { id: itemId } });
       return { removido: true };
+    }
+
+    if (!item.produto.vendaPorPeso && quantidade < 1) {
+      throw new BadRequestException('Quantidade mínima é 1');
+    }
+    if (item.produto.vendaPorPeso && quantidade > 50) {
+      throw new BadRequestException('Peso máximo por item é 50 kg');
     }
 
     return this.prisma.carrinhoItem.update({

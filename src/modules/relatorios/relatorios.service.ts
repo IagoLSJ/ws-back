@@ -51,9 +51,9 @@ export class RelatoriosService {
       i.pedidoId,
       i.pedido.status,
       i.produtoNome,
-      i.quantidade.toString(),
+      Number(i.quantidade).toString(),
       Number(i.precoUnitario).toFixed(2),
-      (Number(i.precoUnitario) * i.quantidade).toFixed(2),
+      (Number(i.precoUnitario) * Number(i.quantidade)).toFixed(2),
     ]);
 
     const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
@@ -125,7 +125,7 @@ export class RelatoriosService {
       p.criadoEm.toISOString(),
       p.id,
       p.status,
-      p.itens.reduce((s, i) => s + i.quantidade, 0).toString(),
+      p.itens.reduce((s, i) => s + Number(i.quantidade), 0).toString(),
       Number(p.total).toFixed(2),
       p.pagamentos.map((pg) => pg.metodo).join('; '),
       p.tipoEntrega || '-',

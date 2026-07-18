@@ -130,6 +130,11 @@ export class AtualizarProdutoDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @IsBoolean()
+  vendaPorPeso?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => GrupoModificadorDto)

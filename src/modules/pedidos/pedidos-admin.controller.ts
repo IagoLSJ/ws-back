@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Param, Body, ParseUUIDPipe, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, ParseUUIDPipe, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { PedidosService } from './pedidos.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -37,5 +37,15 @@ export class PedidosAdminController {
     @CurrentUser('id') usuarioId: string,
   ) {
     return this.service.atualizarStatus(id, status, usuarioId);
+  }
+
+  @Post(':id/confirmar-pagamento')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Confirmar pagamento pendente (PIX/Cartão)' })
+  confirmarPagamento(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('id') usuarioId: string,
+  ) {
+    return this.service.confirmarPagamento(id, usuarioId);
   }
 }

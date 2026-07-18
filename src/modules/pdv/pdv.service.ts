@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../../infra/database/prisma.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { ImprimirService } from '../imprimir/imprimir.service';
+import { CaixaService } from '../caixa/caixa.service';
 import { FinalizarPdvDto } from './dto/finalizar-pdv.dto';
 import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao } from '@prisma/client';
 import { calcularPrecoFinal } from '../../common/utils/preco';
@@ -22,9 +23,12 @@ export class PdvService {
     private prisma: PrismaService,
     private estoqueService: EstoqueService,
     private imprimirService: ImprimirService,
+    private caixaService: CaixaService,
   ) {}
 
   async checkout(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string) {
+    await this.caixaService.exigirCaixaAberto(negocioId);
+
     if (!dto.itens.length) {
       throw new BadRequestException('Nenhum item na venda');
     }
@@ -42,7 +46,7 @@ export class PdvService {
 
     for (const item of dto.itens) {
       const produto = produtos.find((p) => p.id === item.produtoId)!;
-      if (!produto.controlaEstoque) continue;
+      if (!produto.controlaEstoque || produto.vendaPorPeso) continue;
       const estoqueItem = await this.prisma.estoqueItem.findFirst({
         where: { negocioId: produto.negocioId, produtoId: item.produtoId },
       });
@@ -119,7 +123,7 @@ export class PdvService {
 
     for (const item of pedido.itens) {
       const produto = produtos.find((p) => p.id === item.produtoId);
-      if (!produto?.controlaEstoque) continue;
+      if (!produto?.controlaEstoque || produto.vendaPorPeso) continue;
       const estoqueItem = await this.prisma.estoqueItem.findFirst({
         where: { negocioId: produto.negocioId, produtoId: item.produtoId },
       });
@@ -129,7 +133,7 @@ export class PdvService {
         estoqueItem.id,
         {
           tipo: TipoMovimentacao.SAIDA_VENDA,
-          quantidade: item.quantidade,
+          quantidade: Number(item.quantidade),
           motivo: `PDV #${pedido.id.slice(0, 8)}`,
           referencia: pedido.id,
         },
@@ -138,6 +142,7 @@ export class PdvService {
     }
 
     this.imprimirService.imprimirComanda(negocioId, pedido.id).catch(() => {});
+    await this.caixaService.registrarPagamento(negocioId, pedido.id, valorTotal, dto.pagamento.metodo);
 
     return pedido;
   }
