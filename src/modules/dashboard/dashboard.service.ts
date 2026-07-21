@@ -12,43 +12,84 @@ export class DashboardService {
     inicioSemana.setDate(inicioSemana.getDate() - inicioSemana.getDay());
     const inicioMes = new Date(agora.getFullYear(), agora.getMonth(), 1);
 
-    const [pedidos, alertas, produtos, categorias, membros] = await Promise.all([
+    const [
+      faturamentoHoje,
+      faturamentoSemana,
+      faturamentoMes,
+      pedidosHoje,
+      pedidosPendentes,
+      pedidosPorStatus,
+      maisVendidos,
+      ultimosPedidos,
+      alertas,
+      produtos,
+      categorias,
+      membros,
+    ] = await Promise.all([
+      // Faturamento hoje: soma dos pedidos não cancelados de hoje
+      this.prisma.pedido.aggregate({
+        where: { negocioId, criadoEm: { gte: inicioHoje }, status: { not: 'CANCELADO' } },
+        _sum: { total: true },
+      }).then(r => Number(r._sum.total ?? 0)),
+
+      // Faturamento semana
+      this.prisma.pedido.aggregate({
+        where: { negocioId, criadoEm: { gte: inicioSemana }, status: { not: 'CANCELADO' } },
+        _sum: { total: true },
+      }).then(r => Number(r._sum.total ?? 0)),
+
+      // Faturamento mês
+      this.prisma.pedido.aggregate({
+        where: { negocioId, criadoEm: { gte: inicioMes }, status: { not: 'CANCELADO' } },
+        _sum: { total: true },
+      }).then(r => Number(r._sum.total ?? 0)),
+
+      // Total pedidos hoje
+      this.prisma.pedido.count({ where: { negocioId, criadoEm: { gte: inicioHoje } } }),
+
+      // Pedidos pendentes
+      this.prisma.pedido.count({ where: { negocioId, status: 'PENDENTE' } }),
+
+      // Pedidos por status (agregação)
+      this.prisma.pedido.groupBy({
+        by: ['status'],
+        where: { negocioId },
+        _count: { status: true },
+      }).then(rows => rows.map(r => ({ status: r.status, count: r._count.status }))),
+
+      // Mais vendidos (top 5)
+      this.prisma.pedidoItem.groupBy({
+        by: ['produtoNome', 'produtoId'],
+        where: { pedido: { negocioId, status: { not: 'CANCELADO' } } },
+        _sum: { quantidade: true, precoUnitario: true },
+        orderBy: { _sum: { quantidade: 'desc' } },
+        take: 5,
+      }),
+
+      // Últimos 10 pedidos
       this.prisma.pedido.findMany({
         where: { negocioId },
-        include: { pagamentos: true },
         orderBy: { criadoEm: 'desc' },
+        take: 10,
+        select: { id: true, status: true, total: true, criadoEm: true, taxaFrete: true },
       }),
+
+      // Alertas de estoque
       this.prisma.estoqueItem.count({
         where: { negocioId, quantidadeAtual: { lte: 0 } },
       }),
+
+      // Total produtos
       this.prisma.produto.count({ where: { negocioId } }),
+
+      // Total categorias
       this.prisma.categoria.count({ where: { negocioId } }),
+
+      // Total membros
       this.prisma.membroNegocio.count({ where: { negocioId } }),
     ]);
 
-    const pedidosHoje = pedidos.filter((p) => p.criadoEm >= inicioHoje);
-    const pedidosSemana = pedidos.filter((p) => p.criadoEm >= inicioSemana);
-    const pedidosMes = pedidos.filter((p) => p.criadoEm >= inicioMes);
-
-    const somar = (lista: typeof pedidos) =>
-      lista.filter((p) => p.status !== 'CANCELADO').reduce((acc, p) => acc + Number(p.total), 0);
-
-    const contarPorStatus = () => {
-      const map: Record<string, number> = {};
-      for (const p of pedidos) {
-        map[p.status] = (map[p.status] || 0) + 1;
-      }
-      return Object.entries(map).map(([status, count]) => ({ status, count }));
-    };
-
-    const maisVendidos = await this.prisma.pedidoItem.groupBy({
-      by: ['produtoNome', 'produtoId'],
-      where: { pedido: { negocioId, status: { not: 'CANCELADO' } } },
-      _sum: { quantidade: true, precoUnitario: true },
-      orderBy: { _sum: { quantidade: 'desc' } },
-      take: 5,
-    });
-
+    // Receita por produto mais vendido
     const receitaMap = new Map<string, number>();
     if (maisVendidos.length) {
       const ids = maisVendidos.map((m) => m.produtoId);
@@ -66,23 +107,13 @@ export class DashboardService {
       }
     }
 
-    const ultimosPedidos = pedidos.slice(0, 10).map((p) => ({
-      id: p.id,
-      status: p.status,
-      total: Number(p.total),
-      criadoEm: p.criadoEm,
-      taxaFrete: p.taxaFrete ? Number(p.taxaFrete) : null,
-    }));
-
     return {
-      faturamentoHoje: somar(pedidosHoje),
-      faturamentoSemana: somar(pedidosSemana),
-      faturamentoMes: somar(pedidosMes),
-      pedidosHoje: pedidosHoje.length,
-      pedidosSemana: pedidosSemana.length,
-      pedidosMes: pedidosMes.length,
-      pedidosPendentes: pedidos.filter((p) => p.status === 'PENDENTE').length,
-      pedidosPorStatus: contarPorStatus(),
+      faturamentoHoje,
+      faturamentoSemana,
+      faturamentoMes,
+      pedidosHoje,
+      pedidosPendentes,
+      pedidosPorStatus,
       maisVendidos: maisVendidos.map((m) => ({
         produtoNome: m.produtoNome,
         produtoId: m.produtoId,
@@ -93,7 +124,13 @@ export class DashboardService {
       totalCategorias: categorias,
       totalMembros: membros,
       alertasCount: alertas,
-      ultimosPedidos,
+      ultimosPedidos: ultimosPedidos.map((p) => ({
+        id: p.id,
+        status: p.status,
+        total: Number(p.total),
+        criadoEm: p.criadoEm,
+        taxaFrete: p.taxaFrete ? Number(p.taxaFrete) : null,
+      })),
     };
   }
 

@@ -1,6 +1,6 @@
-import { IsString, IsOptional, MinLength, IsBoolean } from 'class-validator';
+import { IsString, IsOptional, MinLength, IsBoolean, IsEnum } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-
+import { TipoNegocio } from '@prisma/client';
 export class AtualizarNegocioDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -22,4 +22,9 @@ export class AtualizarNegocioDto {
   @IsOptional()
   @IsBoolean()
   ativo?: boolean;
+
+  @ApiPropertyOptional({ enum: TipoNegocio })
+  @IsOptional()
+  @IsEnum(TipoNegocio)
+  tipo?: TipoNegocio;
 }

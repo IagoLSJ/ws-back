@@ -5,12 +5,13 @@ import {
   IsArray,
   ValidateNested,
   Min,
+  MaxLength,
   IsEnum,
   IsObject,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { MetodoPagamento } from '@prisma/client';
+import { MetodoPagamento, TipoEntrega } from '@prisma/client';
 
 class DescontoDto {
   @ApiProperty({ enum: ['PERCENTUAL', 'FIXO'] })
@@ -96,4 +97,24 @@ export class FinalizarPdvDto {
   @IsOptional()
   @IsString()
   clienteNome?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  clienteId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  dataVencimento?: string;
+
+  @ApiPropertyOptional({ enum: TipoEntrega, default: TipoEntrega.RETIRADA })
+  @IsOptional()
+  @IsEnum(TipoEntrega)
+  tipoEntrega?: TipoEntrega;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsObject()
+  endereco?: Record<string, any>;
 }

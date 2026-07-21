@@ -91,4 +91,9 @@ export class CheckoutDto {
   @IsOptional()
   @IsString()
   mesaId?: string;
+
+  @ApiPropertyOptional({ example: 'idempotency-key-unica-123' })
+  @IsOptional()
+  @IsString()
+  idempotencyKey?: string;
 }

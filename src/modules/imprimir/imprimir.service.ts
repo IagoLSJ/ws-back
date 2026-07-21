@@ -37,7 +37,7 @@ export class ImprimirService {
       where: { id: pedidoId },
       include: {
         itens: true,
-        negocio: true,
+        negocio: { select: { id: true, nome: true, logoUrl: true } },
         mesa: { select: { numero: true } },
       },
     });
@@ -45,14 +45,16 @@ export class ImprimirService {
 
     const mesaNumero = pedido.mesa?.numero?.toString();
 
-    const statusTraduzido = traduzirStatus(pedido.status);
-    const html = gerarComandaHtml({
+    const logoUrl = (pedido.negocio as any).logoUrl || undefined;
+    const negocioNome = pedido.negocio.nome;
+
+    const comandaBase = {
       numeroPedido: pedido.id.slice(0, 8).toUpperCase(),
       cliente: pedido.contato || undefined,
       mesa: mesaNumero,
       tipoEntrega: pedido.tipoEntrega || undefined,
       endereco: pedido.endereco ? formatarEndereco(pedido.endereco as any) : undefined,
-      status: statusTraduzido,
+      status: traduzirStatus(pedido.status),
       itens: pedido.itens.map(i => ({
         nome: i.produtoNome,
         quantidade: Number(i.quantidade),
@@ -61,30 +63,20 @@ export class ImprimirService {
       })),
       observacao: pedido.observacao || undefined,
       criadoEm: new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(pedido.criadoEm),
-    });
+      logoUrl,
+      negocioNome,
+    };
+
+    const html = gerarComandaHtml(comandaBase);
 
     let enviadoParaRede = false;
-    const dados = {
-      numeroPedido: pedido.id.slice(0, 8).toUpperCase(),
-      cliente: pedido.contato || undefined,
-      mesa: mesaNumero,
-      tipoEntrega: pedido.tipoEntrega || undefined,
-      endereco: pedido.endereco ? formatarEndereco(pedido.endereco as any) : undefined,
-      status: statusTraduzido,
-      itens: pedido.itens.map(i => ({
-        nome: i.produtoNome,
-        quantidade: Number(i.quantidade),
-        modificadores: extrairModificadores(i.modificadores),
-        observacao: undefined,
-      })),
-      observacao: pedido.observacao || undefined,
-      criadoEm: new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(pedido.criadoEm),
-    };
+    const dados = { ...comandaBase, papelLargura: 80 };
     if (impressoraId) {
       const imp = await this.prisma.impressoraConfig.findUnique({ where: { id: impressoraId } });
       if (imp?.conexao === 'REDE' && imp.enderecoIp) {
         try {
-          await imprimirComanda(dados, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
+          const papelLargura = imp.papelLargura || 80;
+          await imprimirComanda({ ...dados, papelLargura }, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
           enviadoParaRede = true;
         } catch (err) {
           this.logger.error(`Erro ao imprimir comanda na impressora ${imp.id}: ${err}`);
@@ -100,7 +92,8 @@ export class ImprimirService {
       for (const imp of impressoras) {
         if (imp.conexao === 'REDE' && imp.enderecoIp) {
           try {
-            await imprimirComanda(dados, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
+            const papelLargura = imp.papelLargura || 80;
+            await imprimirComanda({ ...dados, papelLargura }, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
             enviadoParaRede = true;
           } catch (err) {
             this.logger.error(`Erro ao imprimir comanda na impressora ${imp.id} (${imp.enderecoIp}:${imp.porta}): ${err}`);

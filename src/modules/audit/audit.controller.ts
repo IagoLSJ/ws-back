@@ -23,12 +23,16 @@ export class AuditController {
     @Query('limit') limit?: string,
     @Query('acao') acao?: string,
     @Query('usuarioId') usuarioId?: string,
+    @Query('dataInicio') dataInicio?: string,
+    @Query('dataFim') dataFim?: string,
   ) {
     return this.service.listar(negocioId, {
       page: page ? Number(page) : undefined,
       limit: limit ? Number(limit) : undefined,
       acao,
       usuarioId,
+      dataInicio,
+      dataFim,
     });
   }
 }

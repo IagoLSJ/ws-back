@@ -33,6 +33,7 @@ export class NegociosService {
         nome: dto.nome,
         slug,
         descricao: dto.descricao,
+        tipo: dto.tipo,
         configuracoes: {
           create: {
             controleEstoqueAtivo: true,
@@ -115,6 +116,9 @@ export class NegociosService {
         data: { estoqueMinimo: dto.estoqueMinimoPadrao },
       });
     }
+
+    // Invalida cache da vitrine
+    await this.redis.del(`catalog:v2:${id}:products`);
 
     return this.prisma.configuracaoNegocio.upsert({
       where: { negocioId: id },

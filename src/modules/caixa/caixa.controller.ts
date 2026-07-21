@@ -18,8 +18,8 @@ export class CaixaController {
   constructor(private service: CaixaService) {}
 
   @Post('abrir')
-  @Roles(RoleNegocio.OPERADOR)
-  @ApiOperation({ summary: 'Abrir caixa' })
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Abrir caixa para um operador (gerente+)' })
   async abrir(
     @Param('businessId') businessId: string,
     @Body() dto: AbrirCaixaDto,
@@ -30,7 +30,7 @@ export class CaixaController {
 
   @Post('fechar')
   @Roles(RoleNegocio.GERENTE)
-  @ApiOperation({ summary: 'Fechar caixa' })
+  @ApiOperation({ summary: 'Fechar caixa (gerente+)' })
   async fechar(
     @Param('businessId') businessId: string,
     @Body() dto: FecharCaixaDto,
@@ -41,14 +41,24 @@ export class CaixaController {
 
   @Get('atual')
   @Roles(RoleNegocio.OPERADOR)
-  @ApiOperation({ summary: 'Obter caixa aberto atual' })
-  async atual(@Param('businessId') businessId: string) {
-    return this.service.atual(businessId);
+  @ApiOperation({ summary: 'Meu caixa aberto (filtrado pelo operador logado)' })
+  async atual(
+    @Param('businessId') businessId: string,
+    @Request() req: any,
+  ) {
+    return this.service.atual(businessId, req.user?.id);
+  }
+
+  @Get('abertos')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Listar todos os caixas abertos (gerente+)' })
+  async abertos(@Param('businessId') businessId: string) {
+    return this.service.listarAbertos(businessId);
   }
 
   @Get()
   @Roles(RoleNegocio.OPERADOR)
-  @ApiOperation({ summary: 'Listar todos os caixas' })
+  @ApiOperation({ summary: 'Listar histórico de caixas' })
   async listar(@Param('businessId') businessId: string) {
     return this.service.listar(businessId);
   }
@@ -65,7 +75,7 @@ export class CaixaController {
 
   @Post('movimento')
   @Roles(RoleNegocio.OPERADOR)
-  @ApiOperation({ summary: 'Registrar sangria ou suprimento' })
+  @ApiOperation({ summary: 'Registrar sangria ou suprimento no meu caixa' })
   async movimento(
     @Param('businessId') businessId: string,
     @Body() dto: MovimentoCaixaDto,

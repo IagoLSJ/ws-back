@@ -145,7 +145,7 @@ export class ProdutosService {
   }
 
   async update(negocioId: string, id: string, dto: AtualizarProdutoDto) {
-    await this.findOne(negocioId, id);
+    const existing = await this.findOne(negocioId, id);
 
     const data: any = { ...dto };
     delete data.gruposModificadores;
@@ -206,6 +206,31 @@ export class ProdutosService {
         data: { precoCusto: dto.precoCusto },
       });
     }
+
+    if (dto.controlaEstoque !== undefined && dto.controlaEstoque !== existing.controlaEstoque) {
+      if (dto.controlaEstoque === true) {
+        const existingItem = await this.prisma.estoqueItem.findFirst({
+          where: { produtoId: id },
+        });
+        if (!existingItem) {
+          const config = await this.prisma.configuracaoNegocio.findUnique({
+            where: { negocioId },
+          });
+          await this.prisma.estoqueItem.create({
+            data: {
+              negocioId,
+              produtoId: id,
+              quantidadeAtual: 0,
+              estoqueMinimo: config?.estoqueMinimoPadrao ?? 5,
+              precoCusto: dto.precoCusto ?? existing.precoCusto ?? undefined,
+            },
+          });
+        }
+      } else {
+        await this.prisma.estoqueItem.deleteMany({ where: { produtoId: id } });
+      }
+    }
+
     await this.invalidateCache(negocioId);
     return produto;
   }
@@ -378,15 +403,21 @@ export class ProdutosService {
         descricao: true,
         logoUrl: true,
         bannerUrl: true,
-        configuracoes: { select: { taxaFrete: true, endereco: true, telefoneContato: true } },
+        configuracoes: { select: { taxaFrete: true, endereco: true, telefoneContato: true, horarioFuncionamento: true } },
         taxasFreteBairro: { where: { ativo: true }, select: { bairro: true, taxa: true } },
       },
     });
     if (!negocio) throw new NotFoundException('Negócio não encontrado');
 
+    const aberto = this.verificarAberto(negocio.configuracoes?.horarioFuncionamento as any);
+
     const cacheKey = `catalog:v2:${negocio.id}:products`;
     const cached = await this.redis.get(cacheKey);
-    if (cached) return JSON.parse(cached);
+    if (cached) {
+      const data = JSON.parse(cached);
+      data.aberto = aberto;
+      return data;
+    }
 
     const produtos = await this.prisma.produto.findMany({
       where: {
@@ -412,8 +443,22 @@ export class ProdutosService {
     }
 
     for (const p of produtos) this.normalizeImagens(p);
-    const result = { negocio, categorias: Array.from(categoriasMap.values()), produtos };
+    const result = { negocio, categorias: Array.from(categoriasMap.values()), produtos, aberto };
     await this.redis.setex(cacheKey, 300, JSON.stringify(result));
     return result;
+  }
+
+  private verificarAberto(horario: { dias?: { abertura: string; fechamento: string; fechado: boolean }[] } | null): boolean {
+    if (!horario?.dias?.length) return true;
+
+    const agora = new Date();
+    const hoje = horario.dias[agora.getDay()];
+    if (!hoje || hoje.fechado) return false;
+
+    const minutosAtual = agora.getHours() * 60 + agora.getMinutes();
+    const [hInicio, mInicio] = (hoje.abertura || '00:00').split(':').map(Number);
+    const [hFim, mFim] = (hoje.fechamento || '23:59').split(':').map(Number);
+
+    return minutosAtual >= (hInicio * 60 + mInicio) && minutosAtual <= (hFim * 60 + mFim);
   }
 }

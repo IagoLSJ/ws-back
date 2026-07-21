@@ -25,6 +25,8 @@ import { ImprimirModule } from './modules/imprimir/imprimir.module';
 import { QzModule } from './modules/qz/qz.module';
 import { CaixaModule } from './modules/caixa/caixa.module';
 import { MesasModule } from './modules/mesas/mesas.module';
+import { ClientesModule } from './modules/clientes/clientes.module';
+import { ContasReceberModule } from './modules/contas-receber/contas-receber.module';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import configuration from './config/configuration';
 
@@ -62,6 +64,8 @@ import configuration from './config/configuration';
     QzModule,
     CaixaModule,
     MesasModule,
+    ClientesModule,
+    ContasReceberModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

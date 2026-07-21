@@ -17,6 +17,12 @@ export class AuditInterceptor implements NestInterceptor {
         const user = request.user;
         if (!user) return;
 
+        const SENSITIVE_FIELDS = ['senha', 'senhaHash', 'password', 'token', 'accessToken', 'refreshToken'];
+        const sanitizedBody = request.body ? { ...request.body } : {};
+        for (const field of SENSITIVE_FIELDS) {
+          if (field in sanitizedBody) sanitizedBody[field] = '[REDACTED]';
+        }
+
         this.prisma.auditLog
           .create({
             data: {
@@ -24,7 +30,7 @@ export class AuditInterceptor implements NestInterceptor {
               negocioId: request.params.businessId || request.params.id,
               acao: `${method} ${path}`,
               entidade: context.getClass().name,
-              payload: { body: request.body, params: request.params },
+              payload: { body: sanitizedBody, params: request.params },
               ip: request.ip,
               userAgent: request.headers['user-agent'],
             },

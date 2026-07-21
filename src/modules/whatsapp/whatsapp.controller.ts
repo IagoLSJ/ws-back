@@ -15,12 +15,14 @@ export class WhatsappController {
   ) {}
 
   @Post('criar-pedido')
+  @UseGuards(N8nApiGuard)
   @ApiOperation({ summary: 'Criar pedido via WhatsApp (chamado pelo n8n)' })
   criarPedido(@Param('slug') slug: string, @Body() dto: CriarPedidoWhatsappDto) {
     return this.service.criarPedido(slug, dto);
   }
 
   @Get('meus-pedidos')
+  @UseGuards(N8nApiGuard)
   @ApiOperation({ summary: 'Listar pedidos de um cliente WhatsApp' })
   @ApiQuery({ name: 'telefone', required: true, example: '5511999999999' })
   meusPedidos(@Param('slug') slug: string, @Query('telefone') telefone: string) {

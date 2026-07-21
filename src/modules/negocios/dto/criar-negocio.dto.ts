@@ -1,5 +1,6 @@
-import { IsString, IsOptional, MinLength } from 'class-validator';
+import { IsString, IsOptional, MinLength, IsEnum } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { TipoNegocio } from '@prisma/client';
 
 export class CriarNegocioDto {
   @ApiProperty({ example: 'Lanchonete do João' })
@@ -16,4 +17,9 @@ export class CriarNegocioDto {
   @IsOptional()
   @IsString()
   descricao?: string;
+
+  @ApiPropertyOptional({ enum: TipoNegocio })
+  @IsOptional()
+  @IsEnum(TipoNegocio)
+  tipo?: TipoNegocio;
 }

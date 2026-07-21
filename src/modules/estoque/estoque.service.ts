@@ -140,17 +140,22 @@ export class EstoqueService {
   ) {
     const item = await this.findOne(negocioId, itemId);
 
-    const tiposEntrada = ['ENTRADA', 'TRANSFERENCIA_ENTRADA', 'INVENTARIO'];
+    const tiposEntrada = ['ENTRADA', 'TRANSFERENCIA_ENTRADA'];
     const isEntrada = tiposEntrada.includes(dto.tipo);
+    const isInventario = dto.tipo === 'INVENTARIO';
 
-    if (!isEntrada && dto.quantidade > item.quantidadeAtual) {
+    if (!isEntrada && !isInventario && dto.quantidade > item.quantidadeAtual) {
       throw new BadRequestException('Estoque insuficiente');
     }
 
     const quantidadeAntes = item.quantidadeAtual;
-    const quantidadeApos = isEntrada
-      ? quantidadeAntes + dto.quantidade
-      : quantidadeAntes - dto.quantidade;
+    const quantidadeApos = isInventario
+      ? dto.quantidade
+      : isEntrada
+        ? quantidadeAntes + dto.quantidade
+        : quantidadeAntes - dto.quantidade;
+
+    const delta = Math.abs(quantidadeApos - quantidadeAntes);
 
     const [movimentacao] = await this.prisma.$transaction([
       this.prisma.movimentacaoEstoque.create({
@@ -159,7 +164,7 @@ export class EstoqueService {
           estoqueItemId: itemId,
           usuarioId: usuarioId ?? null,
           tipo: dto.tipo,
-          quantidade: dto.quantidade,
+          quantidade: isInventario ? delta : dto.quantidade,
           quantidadeAntes,
           quantidadeApos,
           motivo: dto.motivo,

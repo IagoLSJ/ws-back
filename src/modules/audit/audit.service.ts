@@ -5,14 +5,24 @@ import { PrismaService } from '../../infra/database/prisma.service';
 export class AuditService {
   constructor(private prisma: PrismaService) {}
 
-  async listar(negocioId: string, query?: { page?: number; limit?: number; acao?: string; usuarioId?: string }) {
+  async listar(negocioId: string, query?: { page?: number; limit?: number; acao?: string; usuarioId?: string; dataInicio?: string; dataFim?: string }) {
     const page = query?.page ?? 1;
     const limit = query?.limit ?? 50;
     const skip = (page - 1) * limit;
 
     const where: any = { negocioId };
-    if (query?.acao) where.acao = { contains: query.acao, mode: 'insensitive' };
+    if (query?.acao) {
+      where.OR = [
+        { acao: { contains: query.acao, mode: 'insensitive' } },
+        { entidade: { contains: query.acao, mode: 'insensitive' } },
+      ];
+    }
     if (query?.usuarioId) where.usuarioId = query.usuarioId;
+    if (query?.dataInicio || query?.dataFim) {
+      where.criadoEm = {};
+      if (query?.dataInicio) where.criadoEm.gte = new Date(query.dataInicio);
+      if (query?.dataFim) where.criadoEm.lte = new Date(query.dataFim);
+    }
 
     const [data, total] = await this.prisma.$transaction([
       this.prisma.auditLog.findMany({

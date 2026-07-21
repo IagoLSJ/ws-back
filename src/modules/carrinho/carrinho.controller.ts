@@ -1,18 +1,12 @@
 import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Delete,
-  Param,
-  Query,
-  Body,
-  ParseUUIDPipe,
+  Controller, Get, Post, Patch, Delete,
+  Param, Body, ParseUUIDPipe, Headers,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { CarrinhoService } from './carrinho.service';
 import { AdicionarAoCarrinhoDto } from './dto/adicionar-ao-carrinho.dto';
 import { Public } from '../../common/decorators/public.decorator';
+import { SessionId } from '../../common/decorators/session-id.decorator';
 
 @ApiTags('Carrinho (Vitrine)')
 @Public()
@@ -22,8 +16,7 @@ export class CarrinhoController {
 
   @Get()
   @ApiOperation({ summary: 'Listar itens do carrinho' })
-  @ApiQuery({ name: 'sessionId', required: true })
-  listar(@Param('slug') slug: string, @Query('sessionId') sessionId: string) {
+  listar(@Param('slug') slug: string, @SessionId() sessionId: string) {
     return this.service.listar(slug, sessionId);
   }
 
@@ -31,7 +24,7 @@ export class CarrinhoController {
   @ApiOperation({ summary: 'Adicionar item ao carrinho' })
   adicionar(
     @Param('slug') slug: string,
-    @Query('sessionId') sessionId: string,
+    @SessionId() sessionId: string,
     @Body() dto: AdicionarAoCarrinhoDto,
   ) {
     return this.service.adicionar(slug, sessionId, dto);
@@ -41,7 +34,7 @@ export class CarrinhoController {
   @ApiOperation({ summary: 'Atualizar quantidade de item' })
   atualizar(
     @Param('slug') slug: string,
-    @Query('sessionId') sessionId: string,
+    @SessionId() sessionId: string,
     @Param('itemId', ParseUUIDPipe) itemId: string,
     @Body('quantidade') quantidade: number,
   ) {
@@ -52,7 +45,7 @@ export class CarrinhoController {
   @ApiOperation({ summary: 'Remover item do carrinho' })
   remover(
     @Param('slug') slug: string,
-    @Query('sessionId') sessionId: string,
+    @SessionId() sessionId: string,
     @Param('itemId', ParseUUIDPipe) itemId: string,
   ) {
     return this.service.removerItem(slug, sessionId, itemId);

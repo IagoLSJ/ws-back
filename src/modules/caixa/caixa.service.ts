@@ -3,37 +3,57 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { AbrirCaixaDto } from './dto/abrir-caixa.dto';
 import { FecharCaixaDto } from './dto/fechar-caixa.dto';
 import { MovimentoCaixaDto } from './dto/movimento-caixa.dto';
-import { TipoMovimentoCaixa } from '@prisma/client';
+import { TipoMovimentoCaixa, RoleNegocio } from '@prisma/client';
 
 @Injectable()
 export class CaixaService {
   constructor(private prisma: PrismaService) {}
 
-  async temCaixaAberto(negocioId: string): Promise<boolean> {
-    const caixa = await this.prisma.caixa.findFirst({
-      where: { negocioId, status: 'ABERTO' },
-    });
+  async temCaixaAberto(negocioId: string, usuarioId?: string): Promise<boolean> {
+    const where: any = { negocioId, status: 'ABERTO' };
+    if (usuarioId) where.operadorId = usuarioId;
+    const caixa = await this.prisma.caixa.findFirst({ where });
     return !!caixa;
   }
 
-  async exigirCaixaAberto(negocioId: string): Promise<void> {
-    const temCaixa = await this.temCaixaAberto(negocioId);
+  async exigirCaixaAberto(negocioId: string, usuarioId?: string): Promise<void> {
+    const temCaixa = await this.temCaixaAberto(negocioId, usuarioId);
     if (!temCaixa) {
-      throw new BadRequestException('Nenhum caixa aberto para este negócio. Abra o caixa antes de registrar vendas.');
+      throw new BadRequestException('Nenhum caixa aberto para você. Peça ao gerente para abrir um caixa.');
     }
   }
 
   async abrir(negocioId: string, dto: AbrirCaixaDto, usuarioId: string) {
     return this.prisma.$transaction(async (tx) => {
-      const aberto = await tx.caixa.findFirst({
-        where: { negocioId, status: 'ABERTO' },
+      const operadorId = dto.operadorId || usuarioId;
+
+      // Valida se o operador já tem caixa aberto
+      const jaTem = await tx.caixa.findFirst({
+        where: { negocioId, operadorId, status: 'ABERTO' },
       });
-      if (aberto) throw new BadRequestException('Já existe um caixa aberto para este negócio');
+      if (jaTem) {
+        throw new BadRequestException('Este operador já possui um caixa aberto');
+      }
+
+      // Valida se o operador é membro do negócio com role OPERADOR+
+      if (operadorId !== usuarioId) {
+        const membro = await tx.membroNegocio.findUnique({
+          where: { usuarioId_negocioId: { usuarioId: operadorId, negocioId } },
+        });
+        if (!membro) {
+          throw new BadRequestException('Operador não encontrado como membro deste negócio');
+        }
+        const hierarquia: Record<string, number> = { SUPER_ADMIN: 100, GERENTE: 80, OPERADOR: 60, VISUALIZADOR: 20 };
+        if ((hierarquia[membro.role] || 0) < (hierarquia['OPERADOR'] || 0)) {
+          throw new BadRequestException('Operador precisa ter role OPERADOR ou superior');
+        }
+      }
 
       const caixa = await tx.caixa.create({
         data: {
           negocioId,
           usuarioAberturaId: usuarioId,
+          operadorId,
           saldoInicial: dto.saldoInicial,
           status: 'ABERTO',
           observacao: dto.observacao,
@@ -51,20 +71,37 @@ export class CaixaService {
 
       return tx.caixa.findUnique({
         where: { id: caixa.id },
-        include: { movimentos: { orderBy: { criadoEm: 'asc' } } },
+        include: {
+          usuarioAbertura: { select: { id: true, nome: true, email: true } },
+          operador: { select: { id: true, nome: true, email: true } },
+          movimentos: { orderBy: { criadoEm: 'asc' } },
+        },
       });
     });
   }
 
-  async atual(negocioId: string) {
+  async atual(negocioId: string, usuarioId: string) {
     const caixa = await this.prisma.caixa.findFirst({
-      where: { negocioId, status: 'ABERTO' },
+      where: { negocioId, operadorId: usuarioId, status: 'ABERTO' },
       include: {
         usuarioAbertura: { select: { id: true, nome: true, email: true } },
+        operador: { select: { id: true, nome: true, email: true } },
         movimentos: { orderBy: { criadoEm: 'desc' }, take: 50 },
       },
     });
     return caixa;
+  }
+
+  async listarAbertos(negocioId: string) {
+    return this.prisma.caixa.findMany({
+      where: { negocioId, status: 'ABERTO' },
+      orderBy: { dataAbertura: 'desc' },
+      include: {
+        usuarioAbertura: { select: { id: true, nome: true } },
+        operador: { select: { id: true, nome: true } },
+        movimentos: { orderBy: { criadoEm: 'desc' }, take: 5 },
+      },
+    });
   }
 
   async listar(negocioId: string) {
@@ -73,6 +110,7 @@ export class CaixaService {
       orderBy: { dataAbertura: 'desc' },
       include: {
         usuarioAbertura: { select: { id: true, nome: true } },
+        operador: { select: { id: true, nome: true } },
         usuarioFechamento: { select: { id: true, nome: true } },
       },
     });
@@ -83,6 +121,7 @@ export class CaixaService {
       where: { id, negocioId },
       include: {
         usuarioAbertura: { select: { id: true, nome: true, email: true } },
+        operador: { select: { id: true, nome: true, email: true } },
         usuarioFechamento: { select: { id: true, nome: true, email: true } },
         movimentos: { orderBy: { criadoEm: 'asc' } },
       },
@@ -93,9 +132,14 @@ export class CaixaService {
 
   async fechar(negocioId: string, dto: FecharCaixaDto, usuarioId: string) {
     return this.prisma.$transaction(async (tx) => {
-      const caixa = await tx.caixa.findFirst({
-        where: { negocioId, status: 'ABERTO' },
-      });
+      const where: any = { negocioId, status: 'ABERTO' };
+      if (dto.caixaId) {
+        where.id = dto.caixaId;
+      } else {
+        where.operadorId = usuarioId;
+      }
+
+      const caixa = await tx.caixa.findFirst({ where });
       if (!caixa) throw new NotFoundException('Nenhum caixa aberto encontrado');
 
       const movimentos = await tx.caixaMovimento.findMany({
@@ -183,9 +227,9 @@ export class CaixaService {
   async movimento(negocioId: string, dto: MovimentoCaixaDto, usuarioId: string) {
     return this.prisma.$transaction(async (tx) => {
       const caixa = await tx.caixa.findFirst({
-        where: { negocioId, status: 'ABERTO' },
+        where: { negocioId, operadorId: usuarioId, status: 'ABERTO' },
       });
-      if (!caixa) throw new NotFoundException('Nenhum caixa aberto encontrado');
+      if (!caixa) throw new NotFoundException('Nenhum caixa aberto para você');
 
       return tx.caixaMovimento.create({
         data: {
@@ -203,10 +247,12 @@ export class CaixaService {
     pedidoId: string,
     valor: number,
     formaPagamento: string,
+    usuarioId?: string,
   ) {
-    const caixa = await this.prisma.caixa.findFirst({
-      where: { negocioId, status: 'ABERTO' },
-    });
+    const where: any = { negocioId, status: 'ABERTO' };
+    if (usuarioId) where.operadorId = usuarioId;
+
+    const caixa = await this.prisma.caixa.findFirst({ where });
     if (!caixa) return;
 
     await this.prisma.caixaMovimento.create({
