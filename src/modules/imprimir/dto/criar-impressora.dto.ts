@@ -27,6 +27,16 @@ export class CriarImpressoraDto {
   @IsIn([58, 80])
   papelLargura?: number;
 
+  @ApiPropertyOptional({ enum: ['COZINHA', 'OPERADOR'], default: 'COZINHA' })
+  @IsOptional()
+  @IsIn(['COZINHA', 'OPERADOR'])
+  tipoUso?: string;
+
+  @ApiPropertyOptional({ description: 'Vincular a um operador (o cupom só imprime nesta impressora para este operador)' })
+  @IsOptional()
+  @IsString()
+  operadorId?: string;
+
   @ApiPropertyOptional({ default: true })
   @IsOptional()
   @IsBoolean()

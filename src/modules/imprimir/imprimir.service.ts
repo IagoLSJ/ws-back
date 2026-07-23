@@ -1,7 +1,8 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Inject } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { PrismaService } from '../../infra/database/prisma.service';
-import * as net from 'net';
-import { imprimirComanda, gerarComandaHtml } from './templates/comanda.template';
+import { gerarComandaHtml } from './templates/comanda.template';
 import { gerarCupomHtml } from './templates/cupom.template';
 import { CriarImpressoraDto } from './dto/criar-impressora.dto';
 import { AtualizarImpressoraDto } from './dto/atualizar-impressora.dto';
@@ -10,7 +11,10 @@ import { AtualizarImpressoraDto } from './dto/atualizar-impressora.dto';
 export class ImprimirService {
   private readonly logger = new Logger(ImprimirService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @InjectQueue('print-job') private printQueue: Queue,
+  ) {}
 
   async listarImpressoras(negocioId: string) {
     return this.prisma.impressoraConfig.findMany({ where: { negocioId }, orderBy: { criadoEm: 'desc' } });
@@ -76,7 +80,8 @@ export class ImprimirService {
       if (imp?.conexao === 'REDE' && imp.enderecoIp) {
         try {
           const papelLargura = imp.papelLargura || 80;
-          await imprimirComanda({ ...dados, papelLargura }, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
+          const htmlAjustado = gerarComandaHtml({ ...dados, papelLargura });
+          await this.enviarTcp(imp.enderecoIp, imp.porta || 9100, htmlAjustado);
           enviadoParaRede = true;
         } catch (err) {
           this.logger.error(`Erro ao imprimir comanda na impressora ${imp.id}: ${err}`);
@@ -85,7 +90,7 @@ export class ImprimirService {
         this.logger.warn(`Impressora ${imp.id} é ${imp.conexao} - backend só suporta REDE. A impressão deve ser feita pelo frontend (QZ Tray/WebUSB).`);
       }
     } else {
-      const impressoras = await this.prisma.impressoraConfig.findMany({ where: { negocioId, ativo: true } });
+      const impressoras = await this.prisma.impressoraConfig.findMany({ where: { negocioId, ativo: true, tipoUso: 'COZINHA' } });
       if (!impressoras.length) {
         this.logger.warn(`Nenhuma impressora ativa configurada para o negócio ${negocioId}`);
       }
@@ -93,7 +98,8 @@ export class ImprimirService {
         if (imp.conexao === 'REDE' && imp.enderecoIp) {
           try {
             const papelLargura = imp.papelLargura || 80;
-            await imprimirComanda({ ...dados, papelLargura }, `tcp://${imp.enderecoIp}:${imp.porta || 9100}`);
+            const htmlAjustado = gerarComandaHtml({ ...dados, papelLargura });
+            await this.enviarTcp(imp.enderecoIp, imp.porta || 9100, htmlAjustado);
             enviadoParaRede = true;
           } catch (err) {
             this.logger.error(`Erro ao imprimir comanda na impressora ${imp.id} (${imp.enderecoIp}:${imp.porta}): ${err}`);
@@ -111,7 +117,7 @@ export class ImprimirService {
     return { html, enviadoParaRede };
   }
 
-  async imprimirCupom(negocioId: string, pedidoId: string, impressoraId?: string): Promise<{ html: string; enviadoParaRede: boolean }> {
+  async imprimirCupom(negocioId: string, pedidoId: string, impressoraId?: string, usuarioId?: string): Promise<{ html: string; enviadoParaRede: boolean }> {
     const pedido = await this.prisma.pedido.findUnique({
       where: { id: pedidoId },
       include: {
@@ -167,7 +173,19 @@ export class ImprimirService {
     if (impressoraId) {
       enviadoParaRede = await this.enviarParaImpressora(impressoraId, html);
     } else {
-      const impressoras = await this.prisma.impressoraConfig.findMany({ where: { negocioId, ativo: true, conexao: 'REDE' } });
+      // Se tem operador logado, tenta achar a impressora dele primeiro
+      let impressoras: any[];
+      if (usuarioId) {
+        const impDoOperador = await this.prisma.impressoraConfig.findFirst({
+          where: { negocioId, ativo: true, tipoUso: 'OPERADOR', operadorId: usuarioId },
+        });
+        if (impDoOperador?.conexao === 'REDE' && impDoOperador.enderecoIp) {
+          const ok = await this.enviarTcp(impDoOperador.enderecoIp, impDoOperador.porta || 9100, html);
+          return { html, enviadoParaRede: ok };
+        }
+      }
+      // Fallback: imprime em qualquer impressora OPERADOR
+      impressoras = await this.prisma.impressoraConfig.findMany({ where: { negocioId, ativo: true, conexao: 'REDE', tipoUso: 'OPERADOR' } });
       for (const imp of impressoras) {
         const ok = await this.enviarTcp(imp.enderecoIp!, imp.porta!, html);
         if (ok) enviadoParaRede = true;
@@ -207,33 +225,19 @@ export class ImprimirService {
     return false;
   }
 
-  private enviarTcp(host: string, port: number, html: string): Promise<boolean> {
-    return new Promise(resolve => {
-      const client = new net.Socket();
-      const timeout = 5000;
-      client.setTimeout(timeout);
-
-      client.connect(port, host, () => {
-        this.logger.log(`Conectado à impressora ${host}:${port}`);
-        client.write(this.htmlToEscPos(html));
+  private async enviarTcp(host: string, port: number, html: string): Promise<boolean> {
+    try {
+      const data = this.htmlToEscPos(html);
+      await this.printQueue.add('print', { host, port, data }, {
+        attempts: 2,
+        backoff: { type: 'fixed', delay: 2000 },
       });
-
-      client.on('data', () => { client.destroy(); resolve(true); });
-
-      client.on('error', (err) => {
-        this.logger.error(`Erro impressora ${host}:${port}: ${err.message}`);
-        client.destroy();
-        resolve(false);
-      });
-
-      client.on('timeout', () => {
-        this.logger.warn(`Timeout impressora ${host}:${port}`);
-        client.destroy();
-        resolve(false);
-      });
-
-      client.on('close', () => resolve(true));
-    });
+      this.logger.log(`Job de impressão enfileirado para ${host}:${port}`);
+      return true;
+    } catch (err) {
+      this.logger.error(`Erro ao enfileirar impressão para ${host}:${port}: ${err}`);
+      return false;
+    }
   }
 
   private htmlToEscPos(html: string): Buffer {

@@ -196,6 +196,8 @@ model ImpressoraConfig {
   enderecoIp    String?
   porta         Int      @default(9100)
   papelLargura  Int      @default(80)
+  tipoUso       String   @default("COZINHA")
+  operadorId    String?
   ativo         Boolean  @default(true)
   criadoEm      DateTime @default(now())
   atualizadoEm  DateTime @updatedAt

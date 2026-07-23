@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../infra/database/prisma.service';
-import { ProdutoStatus } from '@prisma/client';
+import { ProdutoStatus, TipoMovimentacao } from '@prisma/client';
 import { CriarEstoqueItemDto } from './dto/criar-estoque-item.dto';
 import { AtualizarEstoqueItemDto } from './dto/atualizar-estoque-item.dto';
 import { MovimentarEstoqueDto } from './dto/movimentar-estoque.dto';
@@ -211,6 +211,10 @@ export class EstoqueService {
   }
 
   async transferir(negocioId: string, dto: TransferirEstoqueDto, usuarioId?: string) {
+    if (dto.negocioDestinoId === negocioId) {
+      throw new BadRequestException('O negócio de destino deve ser diferente do negócio de origem');
+    }
+
     const itemOrigem = await this.findOne(negocioId, dto.itemOrigemId);
 
     if (dto.quantidade > itemOrigem.quantidadeAtual) {
@@ -271,7 +275,7 @@ export class EstoqueService {
           negocioId,
           estoqueItemId: itemOrigem.id,
           usuarioId: usuarioId ?? null,
-          tipo: 'TRANSFERENCIA_SAIDA',
+          tipo: TipoMovimentacao.TRANSFERENCIA_SAIDA,
           quantidade: dto.quantidade,
           quantidadeAntes: quantidadeAntesOrigem,
           quantidadeApos: novaQtdOrigem,
@@ -283,7 +287,7 @@ export class EstoqueService {
           negocioId: dto.negocioDestinoId,
           estoqueItemId: itemDestino.id,
           usuarioId: null,
-          tipo: 'TRANSFERENCIA_ENTRADA',
+          tipo: TipoMovimentacao.TRANSFERENCIA_ENTRADA,
           quantidade: dto.quantidade,
           quantidadeAntes: quantidadeAntesDestino,
           quantidadeApos: quantidadeAntesDestino + dto.quantidade,

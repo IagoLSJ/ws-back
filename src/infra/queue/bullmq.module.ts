@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { BullModule as NestBullModule } from '@nestjs/bullmq';
+import { PrintJobProcessor } from './print-job.processor';
 
 function redisUrl(url: string): { host: string; port: number } {
   try {
@@ -19,7 +20,11 @@ function redisUrl(url: string): { host: string; port: number } {
     NestBullModule.registerQueue({
       name: 'alertas-estoque',
     }),
+    NestBullModule.registerQueue({
+      name: 'print-job',
+    }),
   ],
-  exports: [NestBullModule],
+  providers: [PrintJobProcessor],
+  exports: [NestBullModule, PrintJobProcessor],
 })
 export class BullModule {}

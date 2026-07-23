@@ -325,25 +325,32 @@ export class ProdutosService {
   }
 
   async buscarPorCodigoBarrasPDV(codigo: string) {
-    const formatoToledo = this.parseToledoBarcode(codigo);
+    const candidatosToledo = this.parseToledoBarcode(codigo);
 
     let produto: any;
 
-    if (formatoToledo) {
-      produto = await this.prisma.produto.findFirst({
-        where: { plu: formatoToledo.plu, status: 'ATIVO' },
-        include: {
-          categoria: true,
-          negocio: { select: { id: true, nome: true } },
-          imagens: { orderBy: { ordem: 'asc' } },
-          gruposModificadores: { include: { opcoes: true }, orderBy: { ordem: 'asc' } },
-          estoqueItem: { select: { quantidadeAtual: true, estoqueMinimo: true } },
-        },
-      });
-      if (produto) {
-        produto = { ...produto, preco: formatoToledo.preco };
+    // Tenta cada formato Toledo até achar um produto
+    if (candidatosToledo.length) {
+      for (const fmt of candidatosToledo) {
+        produto = await this.prisma.produto.findFirst({
+          where: { plu: fmt.plu, status: 'ATIVO' },
+          include: {
+            categoria: true,
+            negocio: { select: { id: true, nome: true } },
+            imagens: { orderBy: { ordem: 'asc' } },
+            gruposModificadores: { include: { opcoes: true }, orderBy: { ordem: 'asc' } },
+            estoqueItem: { select: { quantidadeAtual: true, estoqueMinimo: true } },
+          },
+        });
+        if (produto) {
+          produto = { ...produto, preco: fmt.preco };
+          break;
+        }
       }
-    } else {
+    }
+
+    if (!produto) {
+      // 1. Busca por codigoBarras
       produto = await this.prisma.produto.findFirst({
         where: { codigoBarras: codigo, status: 'ATIVO' },
         include: {
@@ -354,6 +361,23 @@ export class ProdutosService {
           estoqueItem: { select: { quantidadeAtual: true, estoqueMinimo: true } },
         },
       });
+
+      // 2. Fallback: busca por PLU (códigos curtos digitados manualmente)
+      if (!produto && /^\d{1,10}$/.test(codigo)) {
+        const pluNum = parseInt(codigo, 10);
+        if (!isNaN(pluNum)) {
+          produto = await this.prisma.produto.findFirst({
+            where: { plu: pluNum, status: 'ATIVO' },
+            include: {
+              categoria: true,
+              negocio: { select: { id: true, nome: true } },
+              imagens: { orderBy: { ordem: 'asc' } },
+              gruposModificadores: { include: { opcoes: true }, orderBy: { ordem: 'asc' } },
+              estoqueItem: { select: { quantidadeAtual: true, estoqueMinimo: true } },
+            },
+          });
+        }
+      }
     }
 
     if (!produto) throw new NotFoundException('Produto não encontrado para este código');
@@ -361,16 +385,28 @@ export class ProdutosService {
     return produto;
   }
 
-  private parseToledoBarcode(codigo: string): { plu: number; preco: number } | null {
-    if (!codigo || codigo.length < 13) return null;
-    if (codigo[0] !== '2') return null;
+  private parseToledoBarcode(codigo: string): { plu: number; preco: number }[] {
+    const resultados: { plu: number; preco: number }[] = [];
 
-    const plu = parseInt(codigo.substring(1, 6), 10);
-    const precoCentavos = parseInt(codigo.substring(6, 11), 10);
+    if (!codigo || codigo.length < 13 || codigo[0] !== '2') return resultados;
 
-    if (isNaN(plu) || isNaN(precoCentavos)) return null;
+    // Formato A: 2 + 5(PLU) + 5(preço) + 2(verificador) = 13
+    // Balanças mais antigas/padrão
+    const plu5 = parseInt(codigo.substring(1, 6), 10);
+    const preco5 = parseInt(codigo.substring(6, 11), 10);
+    if (!isNaN(plu5) && !isNaN(preco5)) {
+      resultados.push({ plu: plu5, preco: preco5 / 100 });
+    }
 
-    return { plu, preco: precoCentavos / 100 };
+    // Formato B: 2 + 4(PLU) + 7(preço centavos) + 2(verificador) = 13
+    // Balanças Toledo/Lund novas (ex: PLU=100, R$5,12 → 2010000005125)
+    const plu4 = parseInt(codigo.substring(1, 5), 10);
+    const preco7 = parseInt(codigo.substring(5, 12), 10);
+    if (!isNaN(plu4) && !isNaN(preco7)) {
+      resultados.push({ plu: plu4, preco: preco7 / 100 });
+    }
+
+    return resultados;
   }
 
   async deleteImage(negocioId: string, produtoId: string, imagemId: string) {
