@@ -17,6 +17,11 @@ export class MesasService {
       throw new BadRequestException('Mesas só estão disponíveis para negócios de comida');
     }
 
+    const existente = await this.prisma.mesa.findFirst({
+      where: { negocioId, numero: dto.numero },
+    });
+    if (existente) throw new BadRequestException(`Já existe uma mesa com o número ${dto.numero}`);
+
     const mesa = await this.prisma.mesa.create({
       data: {
         negocioId,
@@ -53,57 +58,53 @@ export class MesasService {
       where: { id, negocioId },
     });
     if (!mesa) throw new NotFoundException('Mesa não encontrada');
+    if (mesa.status === 'OCUPADA') throw new BadRequestException('Libere a mesa antes de removê-la');
 
     await this.prisma.mesa.delete({ where: { id } });
     return { removido: true };
   }
 
   async ocupar(negocioId: string, id: string) {
-    const mesa = await this.prisma.mesa.findFirst({
-      where: { id, negocioId, ativa: true },
-    });
-    if (!mesa) throw new NotFoundException('Mesa não encontrada ou inativa');
-    if (mesa.status === 'OCUPADA') throw new BadRequestException('Mesa já está ocupada');
-
     const sessionId = randomUUID();
 
-    await this.prisma.mesa.update({
-      where: { id },
-      data: {
-        status: 'OCUPADA',
-        sessionId,
-      },
+    const updated = await this.prisma.mesa.updateMany({
+      where: { id, negocioId, ativa: true, status: { not: 'OCUPADA' } },
+      data: { status: 'OCUPADA', sessionId },
     });
 
+    if (updated.count === 0) {
+      const mesa = await this.prisma.mesa.findFirst({ where: { id, negocioId } });
+      if (!mesa || !mesa.ativa) throw new NotFoundException('Mesa não encontrada ou inativa');
+      throw new BadRequestException('Mesa já está ocupada');
+    }
+
+    const mesa = await this.prisma.mesa.findUnique({ where: { id }, select: { numero: true, qrCodeToken: true } });
     const slug = await this.prisma.negocio.findUnique({
       where: { id: negocioId },
       select: { slug: true },
     });
 
     return {
-      mesaId: mesa.id,
-      numero: mesa.numero,
+      mesaId: id,
+      numero: mesa!.numero,
       sessionId,
-      qrUrl: slug ? `/vitrine/${slug.slug}?mesaToken=${mesa.qrCodeToken}` : undefined,
+      qrUrl: slug ? `/vitrine/${slug.slug}?mesaToken=${mesa!.qrCodeToken}` : undefined,
     };
   }
 
   async liberar(negocioId: string, id: string) {
-    const mesa = await this.prisma.mesa.findFirst({
-      where: { id, negocioId },
-    });
-    if (!mesa) throw new NotFoundException('Mesa não encontrada');
-    if (mesa.status !== 'OCUPADA') throw new BadRequestException('Mesa não está ocupada');
-
-    await this.prisma.mesa.update({
-      where: { id },
-      data: {
-        status: 'LIVRE',
-        sessionId: null,
-      },
+    const updated = await this.prisma.mesa.updateMany({
+      where: { id, negocioId, status: 'OCUPADA' },
+      data: { status: 'LIVRE', sessionId: null },
     });
 
-    return { mesaId: mesa.id, numero: mesa.numero, status: 'LIVRE' };
+    if (updated.count === 0) {
+      const mesa = await this.prisma.mesa.findFirst({ where: { id, negocioId } });
+      if (!mesa) throw new NotFoundException('Mesa não encontrada');
+      throw new BadRequestException('Mesa não está ocupada');
+    }
+
+    return { mesaId: id, status: 'LIVRE' };
   }
 
   async validarMesaPorToken(slug: string, token: string) {

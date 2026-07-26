@@ -133,6 +133,21 @@ export class AtualizarProdutoDto {
   @IsBoolean()
   vendaPorPeso?: boolean;
 
+  @ApiPropertyOptional({ description: 'Unidade de medida (UN, KG, LT)' })
+  @IsOptional()
+  @IsString()
+  unidadeMedida?: string;
+
+  @ApiPropertyOptional({ description: 'NCM' })
+  @IsOptional()
+  @IsString()
+  ncm?: string;
+
+  @ApiPropertyOptional({ description: 'CFOP' })
+  @IsOptional()
+  @IsString()
+  cfop?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsArray()

@@ -132,6 +132,21 @@ export class CriarProdutoDto {
   @IsBoolean()
   vendaPorPeso?: boolean;
 
+  @ApiPropertyOptional({ description: 'Unidade de medida (UN, KG, LT)' })
+  @IsOptional()
+  @IsString()
+  unidadeMedida?: string;
+
+  @ApiPropertyOptional({ description: 'NCM (código fiscal da mercadoria, ex: 21069090)' })
+  @IsOptional()
+  @IsString()
+  ncm?: string;
+
+  @ApiPropertyOptional({ description: 'CFOP (operação fiscal, ex: 5102 para venda)' })
+  @IsOptional()
+  @IsString()
+  cfop?: string;
+
   @ApiPropertyOptional({ type: [GrupoModificadorDto] })
   @IsOptional()
   @IsArray()

@@ -253,7 +253,7 @@ export class CaixaService {
     if (usuarioId) where.operadorId = usuarioId;
 
     const caixa = await this.prisma.caixa.findFirst({ where });
-    if (!caixa) return;
+    if (!caixa) throw new BadRequestException('Nenhum caixa aberto encontrado. Abra o caixa antes de registrar pagamentos.');
 
     await this.prisma.caixaMovimento.create({
       data: {

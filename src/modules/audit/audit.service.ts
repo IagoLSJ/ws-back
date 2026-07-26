@@ -21,7 +21,11 @@ export class AuditService {
     if (query?.dataInicio || query?.dataFim) {
       where.criadoEm = {};
       if (query?.dataInicio) where.criadoEm.gte = new Date(query.dataInicio);
-      if (query?.dataFim) where.criadoEm.lte = new Date(query.dataFim);
+      if (query?.dataFim) {
+        const fim = new Date(query.dataFim);
+        fim.setHours(23, 59, 59, 999);
+        where.criadoEm.lte = fim;
+      }
     }
 
     const [data, total] = await this.prisma.$transaction([

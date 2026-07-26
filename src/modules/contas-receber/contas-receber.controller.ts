@@ -43,7 +43,7 @@ export class ContasReceberController {
   }
 
   @Post(':id/baixa')
-  @Roles(RoleNegocio.GERENTE, RoleNegocio.OPERADOR, RoleNegocio.SUPER_ADMIN)
+  @Roles(RoleNegocio.GERENTE, RoleNegocio.SUPER_ADMIN)
   @ApiOperation({ summary: 'Dar baixa (parcial ou total) em conta a receber' })
   darBaixa(
     @Param('businessId') negocioId: string,
@@ -54,7 +54,7 @@ export class ContasReceberController {
   }
 
   @Post('cliente/:clienteId/baixa')
-  @Roles(RoleNegocio.GERENTE, RoleNegocio.OPERADOR, RoleNegocio.SUPER_ADMIN)
+  @Roles(RoleNegocio.GERENTE, RoleNegocio.SUPER_ADMIN)
   @ApiOperation({ summary: 'Dar baixa no saldo devedor do cliente (aplica nas contas mais antigas)' })
   darBaixaCliente(
     @Param('businessId') negocioId: string,

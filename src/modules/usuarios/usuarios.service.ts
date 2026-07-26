@@ -44,9 +44,10 @@ export class UsuariosService {
 
   async update(id: string, dto: AtualizarUsuarioDto) {
     const data: any = {};
-    if (dto.nome) data.nome = dto.nome;
-    if (dto.email) data.email = dto.email;
-    if (dto.senha) data.senhaHash = await bcrypt.hash(dto.senha, this.SALT_ROUNDS);
+    if (dto.nome !== undefined) data.nome = dto.nome;
+    if (dto.email !== undefined) data.email = dto.email;
+    if (dto.senha !== undefined) data.senhaHash = await bcrypt.hash(dto.senha, this.SALT_ROUNDS);
+    if (dto.ativo !== undefined) data.ativo = dto.ativo;
 
     return this.prisma.usuario.update({
       where: { id },

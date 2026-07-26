@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { ImprimirService } from '../imprimir/imprimir.service';
 import { CaixaService } from '../caixa/caixa.service';
 import { ContasReceberService } from '../contas-receber/contas-receber.service';
+import { FiscalService } from '../fiscal/fiscal.service';
 import { FinalizarPdvDto } from './dto/finalizar-pdv.dto';
 import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao } from '@prisma/client';
 import { calcularPrecoFinal } from '../../common/utils/preco';
@@ -20,15 +21,18 @@ function aplicarDesconto(
 
 @Injectable()
 export class PdvService {
+  private readonly logger = new Logger(PdvService.name);
   constructor(
     private prisma: PrismaService,
     private estoqueService: EstoqueService,
     private imprimirService: ImprimirService,
     private caixaService: CaixaService,
     private contasReceberService: ContasReceberService,
+    private fiscalService: FiscalService,
   ) {}
 
   async checkout(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string) {
+
     await this.caixaService.exigirCaixaAberto(negocioId, usuarioId);
 
     if (!dto.itens.length) {
@@ -46,17 +50,13 @@ export class PdvService {
       throw new BadRequestException('Alguns produtos não encontrados ou inativos');
     }
 
-    // Validação de estoque (fora da transação, apenas leitura)
-    for (const item of dto.itens) {
-      const produto = produtos.find((p) => p.id === item.produtoId)!;
-      if (!produto.controlaEstoque || produto.vendaPorPeso) continue;
-      const estoqueItem = await this.prisma.estoqueItem.findFirst({
-        where: { negocioId: produto.negocioId, produtoId: item.produtoId },
-      });
-      if (!estoqueItem || estoqueItem.quantidadeAtual < (item.quantidade ?? 1)) {
-        throw new BadRequestException(`Estoque insuficiente para "${produto.nome}"`);
-      }
-    }
+    // Verifica caixa aberto dentro da transação
+    const [caixa] = await this.prisma.$transaction([
+      this.prisma.caixa.findFirst({
+        where: { negocioId, status: 'ABERTO', ...(usuarioId ? { operadorId: usuarioId } : {}) },
+      }),
+    ]);
+    if (!caixa) throw new BadRequestException('Nenhum caixa aberto encontrado');
 
     const itensData = await Promise.all(dto.itens.map(async (item) => {
       const produto = produtos.find((p) => p.id === item.produtoId)!;
@@ -107,12 +107,14 @@ export class PdvService {
       }
     }
 
-    // TRANSAÇÃO: pedido + estoque + contas + caixa
+    const sessionId = `pdv-${negocioId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    // TRANSAÇÃO ÚNICA: pedido + estoque + caixa
     const pedido = await this.prisma.$transaction(async (tx) => {
       const p = await tx.pedido.create({
         data: {
           negocioId,
-          sessionId: `pdv-${negocioId}-${Date.now()}`,
+          sessionId,
           usuarioId,
           status: StatusPedido.CONFIRMADO,
           total: valorTotal,
@@ -148,9 +150,11 @@ export class PdvService {
         const produto = produtos.find((pr) => pr.id === item.produtoId);
         if (!produto?.controlaEstoque || produto.vendaPorPeso) continue;
         const ei = await tx.estoqueItem.findFirst({
-          where: { negocioId: produto.negocioId, produtoId: item.produtoId },
+          where: { negocioId, produtoId: item.produtoId },
         });
-        if (!ei) continue;
+        if (!ei || Number(ei.quantidadeAtual) < Number(item.quantidade)) {
+          throw new BadRequestException(`Estoque insuficiente para "${produto!.nome}"`);
+        }
         const qtd = Number(item.quantidade);
         const qtdAntes = Number(ei.quantidadeAtual);
         await tx.estoqueItem.update({
@@ -159,7 +163,7 @@ export class PdvService {
         });
         await tx.movimentacaoEstoque.create({
           data: {
-            negocioId: produto.negocioId,
+            negocioId,
             estoqueItemId: ei.id,
             usuarioId: usuarioId ?? null,
             tipo: TipoMovimentacao.SAIDA_VENDA,
@@ -172,7 +176,21 @@ export class PdvService {
         });
       }
 
-      // Crediário: cria conta a receber e atualiza saldo devedor
+      // Registro no caixa DENTRO da transação
+      if (!isCrediario) {
+        await tx.caixaMovimento.create({
+          data: {
+            caixaId: caixa.id,
+            tipo: 'PAGAMENTO' as any,
+            valor: valorTotal,
+            formaPagamento: dto.pagamento.metodo,
+            pedidoId: p.id,
+            descricao: `Venda #${p.id.slice(0, 8)}`,
+          },
+        });
+      }
+
+      // Crediário: cria conta a receber
       if (isCrediario && dto.clienteId && dto.dataVencimento) {
         await tx.contaReceber.create({
           data: {
@@ -189,15 +207,17 @@ export class PdvService {
         });
       }
 
-      // Não registra pagamento no caixa dentro da transação (caixaService usa prisma próprio)
       return p;
     });
 
-    this.imprimirService.imprimirComanda(negocioId, pedido.id).catch(() => {});
+    // Fire-and-forget: impressão e NF-e (fora da transação)
+    this.imprimirService.imprimirComanda(negocioId, pedido.id).catch((err) => {
+      this.logger.error(`Erro ao imprimir comanda para pedido ${pedido.id}: ${err}`);
+    });
 
-    if (!isCrediario) {
-      await this.caixaService.registrarPagamento(negocioId, pedido.id, valorTotal, dto.pagamento.metodo, usuarioId);
-    }
+    this.fiscalService.emitirNFe(negocioId, pedido.id).catch((err) => {
+      this.logger.error(`Erro ao emitir NF-e para pedido ${pedido.id}: ${err}`);
+    });
 
     return pedido;
   }

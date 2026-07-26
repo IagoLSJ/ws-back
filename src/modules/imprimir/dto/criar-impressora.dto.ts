@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, IsBoolean, IsIn, Min } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsBoolean, IsIn, Min, Max, ValidateIf } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CriarImpressoraDto {
@@ -11,14 +11,15 @@ export class CriarImpressoraDto {
   conexao!: string;
 
   @ApiPropertyOptional()
-  @IsOptional()
+  @ValidateIf(o => o.conexao === 'REDE')
   @IsString()
   enderecoIp?: string;
 
   @ApiPropertyOptional({ default: 9100 })
-  @IsOptional()
+  @ValidateIf(o => o.conexao === 'REDE')
   @IsInt()
   @Min(1)
+  @Max(65535)
   porta?: number;
 
   @ApiPropertyOptional({ default: 80 })

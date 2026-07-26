@@ -6,11 +6,12 @@ import {
   Min,
   ValidateNested,
   IsObject,
+  IsDateString,
   Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { MetodoPagamento } from '@prisma/client';
+import { MetodoPagamento, TipoEntrega } from '@prisma/client';
 
 export class EnderecoEntregaDto {
   @ApiPropertyOptional({ example: 'Rua das Flores' })
@@ -50,9 +51,9 @@ export class EnderecoEntregaDto {
 }
 
 export class CheckoutDto {
-  @ApiProperty({ enum: ['ENTREGA', 'RETIRADA', 'MESA'], example: 'ENTREGA' })
-  @IsString()
-  tipoEntrega!: 'ENTREGA' | 'RETIRADA' | 'MESA';
+  @ApiProperty({ enum: TipoEntrega, example: 'ENTREGA' })
+  @IsEnum(TipoEntrega)
+  tipoEntrega!: TipoEntrega;
 
   @ApiPropertyOptional({ example: 'Deixar na portaria' })
   @IsOptional()
@@ -84,7 +85,7 @@ export class CheckoutDto {
 
   @ApiPropertyOptional({ example: '2025-12-25T18:00:00.000Z' })
   @IsOptional()
-  @IsString()
+  @IsDateString()
   agendadoPara?: string;
 
   @ApiPropertyOptional({ example: 'uuid-da-mesa' })

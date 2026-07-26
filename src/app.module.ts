@@ -27,6 +27,8 @@ import { CaixaModule } from './modules/caixa/caixa.module';
 import { MesasModule } from './modules/mesas/mesas.module';
 import { ClientesModule } from './modules/clientes/clientes.module';
 import { ContasReceberModule } from './modules/contas-receber/contas-receber.module';
+import { FiscalModule } from './modules/fiscal/fiscal.module';
+import { CombosModule } from './modules/combos/combos.module';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import configuration from './config/configuration';
 
@@ -66,6 +68,8 @@ import configuration from './config/configuration';
     MesasModule,
     ClientesModule,
     ContasReceberModule,
+    FiscalModule,
+    CombosModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

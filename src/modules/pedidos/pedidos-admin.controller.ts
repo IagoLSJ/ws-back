@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Body, ParseUUIDPipe, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, ParseUUIDPipe, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { PedidosService } from './pedidos.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -17,8 +17,14 @@ export class PedidosAdminController {
   @Get()
   @Roles(RoleNegocio.VISUALIZADOR)
   @ApiOperation({ summary: 'Listar pedidos do negócio' })
-  listar(@Param('businessId') businessId: string) {
-    return this.service.listarPorNegocio(businessId);
+  listar(
+    @Param('businessId') businessId: string,
+    @Query('dataInicio') dataInicio?: string,
+    @Query('dataFim') dataFim?: string,
+    @Query('limite') limite?: string,
+    @Query('pagina') pagina?: string,
+  ) {
+    return this.service.listarPorNegocio(businessId, dataInicio, dataFim, limite ? Number(limite) : undefined, pagina ? Number(pagina) : undefined);
   }
 
   @Get(':id')

@@ -19,32 +19,30 @@ export class PrintJobProcessor extends WorkerHost {
 
     return new Promise<void>((resolve, reject) => {
       const client = new net.Socket();
-      const timeout = 8000;
+      const timeout = 15000;
+      let settled = false;
+
       client.setTimeout(timeout);
 
       client.connect(port, host, () => {
         this.logger.log(`Conectado à impressora ${host}:${port}`);
-        client.write(data);
-      });
-
-      client.on('data', () => {
-        client.destroy();
-        resolve();
+        client.write(data, () => {
+          client.destroy();
+          if (!settled) { settled = true; resolve(); }
+        });
       });
 
       client.on('error', (err) => {
         this.logger.error(`Erro impressora ${host}:${port}: ${err.message}`);
         client.destroy();
-        reject(err);
+        if (!settled) { settled = true; reject(err); }
       });
 
       client.on('timeout', () => {
         this.logger.warn(`Timeout impressora ${host}:${port}`);
         client.destroy();
-        reject(new Error('Timeout'));
+        if (!settled) { settled = true; reject(new Error('Timeout')); }
       });
-
-      client.on('close', () => resolve());
     });
   }
 }

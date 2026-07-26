@@ -285,72 +285,85 @@ export class PedidosService {
     }
     const valorTotal = Math.round((totalProdutos + taxaFrete) * 100) / 100;
 
-    const pedido = await this.prisma.pedido.create({
-      data: {
-        negocioId,
-        sessionId,
-        usuarioId,
-        status: StatusPedido.PENDENTE,
-        total: valorTotal,
-        tipoEntrega: mesaData.mesaId ? TipoEntrega.MESA : dto.tipoEntrega as TipoEntrega,
-        taxaFrete: mesaData.mesaId ? 0 : (taxaFrete > 0 ? taxaFrete : undefined),
-        observacao: dto.observacao,
-        endereco: mesaData.mesaId ? undefined : (dto.enderecoEntrega ? JSON.parse(JSON.stringify(dto.enderecoEntrega)) : undefined),
-        contato: dto.contato,
-        agendadoPara: dto.agendadoPara
-          ? (() => {
-              const data = new Date(dto.agendadoPara);
-              if (isNaN(data.getTime())) {
-                throw new BadRequestException('Data de agendamento inválida');
-              }
-              if (data <= new Date()) {
-                throw new BadRequestException('Agendamento deve ser no futuro');
-              }
-              return data;
-            })()
-          : undefined,
-        ...mesaData,
-        itens: { create: itensData },
-        pagamentos: {
-          create: {
-            valor: valorTotal,
-            metodo: dto.metodoPagamento,
-            status:
-              dto.metodoPagamento === MetodoPagamento.DINHEIRO
-                ? StatusPagamento.APROVADO
-                : StatusPagamento.PENDENTE,
+    let pedido: any;
+
+    await this.prisma.$transaction(async (tx) => {
+      pedido = await tx.pedido.create({
+        data: {
+          negocioId,
+          sessionId,
+          usuarioId,
+          status: StatusPedido.PENDENTE,
+          total: valorTotal,
+          tipoEntrega: dto.tipoEntrega,
+          taxaFrete: dto.tipoEntrega === TipoEntrega.MESA ? 0 : (taxaFrete > 0 ? taxaFrete : undefined),
+          observacao: dto.observacao,
+          endereco: dto.tipoEntrega === TipoEntrega.MESA ? undefined : (dto.enderecoEntrega ? dto.enderecoEntrega as any : undefined),
+          contato: dto.contato,
+          agendadoPara: dto.agendadoPara
+            ? (() => {
+                const data = new Date(dto.agendadoPara);
+                if (isNaN(data.getTime())) {
+                  throw new BadRequestException('Data de agendamento inválida');
+                }
+                if (data <= new Date()) {
+                  throw new BadRequestException('Agendamento deve ser no futuro');
+                }
+                return data;
+              })()
+            : undefined,
+          ...mesaData,
+          itens: { create: itensData },
+          pagamentos: {
+            create: {
+              valor: valorTotal,
+              metodo: dto.metodoPagamento,
+              status:
+                dto.metodoPagamento === MetodoPagamento.DINHEIRO
+                  ? StatusPagamento.APROVADO
+                  : StatusPagamento.PENDENTE,
+            },
           },
         },
-      },
-      include: { itens: true, pagamentos: true },
+        include: { itens: true, pagamentos: true },
+      });
+
+      // Para DINHEIRO: baixa estoque e confirma já
+      if (dto.metodoPagamento === MetodoPagamento.DINHEIRO) {
+        await tx.pedido.update({
+          where: { id: pedido.id },
+          data: { status: StatusPedido.CONFIRMADO },
+        });
+        pedido.status = StatusPedido.CONFIRMADO;
+        await this.baixarEstoqueTx(tx as any, negocioId, pedido, usuarioId);
+      }
+
+      await tx.carrinhoItem.deleteMany({ where: { carrinhoId: carrinho.id } });
+
+      // Salva idempotency key dentro da transação
+      if (dto.idempotencyKey) {
+        // A idempotency é salva no Redis (fora da tx), mas só após a tx
+      }
     });
 
+    // Idempotency: salva no Redis após transação bem-sucedida
+    if (dto.idempotencyKey && pedido) {
+      await this.redis.setex(`checkout:${dto.idempotencyKey}`, 86400, pedido.id).catch(() => {});
+    }
+
+    // Imprime comanda só para pagamentos confirmados
     if (dto.metodoPagamento === MetodoPagamento.DINHEIRO) {
-      await this.caixaService.exigirCaixaAberto(negocioId, usuarioId);
-      await this.prisma.pedido.update({
-        where: { id: pedido.id },
-        data: { status: StatusPedido.CONFIRMADO },
+      this.imprimirService.imprimirComanda(negocioId, pedido.id).catch((err) => {
+        this.logger.error(`Erro ao imprimir comanda para pedido ${pedido.id}: ${err}`);
       });
-      pedido.status = StatusPedido.CONFIRMADO;
-      await this.baixarEstoque(negocioId, pedido, usuarioId);
+    }
+
+    // Registra no caixa (fora da transação, caixaService tem prisma próprio)
+    if (dto.metodoPagamento === MetodoPagamento.DINHEIRO) {
       await this.caixaService.registrarPagamento(negocioId, pedido.id, valorTotal, 'DINHEIRO', usuarioId);
     }
 
-    this.imprimirService.imprimirComanda(negocioId, pedido.id).catch((err) => {
-      this.logger.error(`Erro ao imprimir comanda automaticamente para pedido ${pedido.id}: ${err}`);
-    });
-
-    await this.prisma.carrinhoItem.deleteMany({ where: { carrinhoId: carrinho.id } });
-
-    // Salva idempotency key
-    if (dto.idempotencyKey) {
-      await this.redis.setex(`checkout:${dto.idempotencyKey}`, 86400, pedido.id);
-    }
-
-    return this.prisma.pedido.findUnique({
-      where: { id: pedido.id },
-      include: { itens: true, pagamentos: true },
-    });
+    return pedido;
   }
 
   async listarPorSession(slug: string, sessionId: string) {
@@ -374,10 +387,31 @@ export class PedidosService {
     return pedido;
   }
 
-  async listarPorNegocio(negocioId: string) {
+  async listarPorNegocio(negocioId: string, dataInicio?: string, dataFim?: string, limite?: number, pagina?: number) {
+    const where: any = { negocioId };
+    if (dataInicio || dataFim) {
+      where.criadoEm = {};
+      if (dataInicio) where.criadoEm.gte = new Date(dataInicio);
+      if (dataFim) {
+        const fim = new Date(dataFim);
+        fim.setHours(23, 59, 59, 999);
+        where.criadoEm.lte = fim;
+      }
+    }
+    if (limite && limite > 0) {
+      const take = limite;
+      const skip = pagina && pagina > 1 ? (pagina - 1) * take : 0;
+      const [data, total] = await this.prisma.$transaction([
+        this.prisma.pedido.findMany({
+          where, orderBy: { criadoEm: 'desc' }, skip, take,
+          include: { itens: true, pagamentos: true },
+        }),
+        this.prisma.pedido.count({ where }),
+      ]);
+      return { data, total, pagina: pagina || 1, totalPaginas: Math.ceil(total / take) };
+    }
     return this.prisma.pedido.findMany({
-      where: { negocioId },
-      orderBy: { criadoEm: 'desc' },
+      where, orderBy: { criadoEm: 'desc' },
       include: { itens: true, pagamentos: true },
     });
   }

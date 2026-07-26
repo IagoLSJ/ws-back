@@ -1,4 +1,4 @@
-import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class AtualizarUsuarioDto {
@@ -18,4 +18,9 @@ export class AtualizarUsuarioDto {
   @IsString()
   @MinLength(6)
   senha?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  ativo?: boolean;
 }

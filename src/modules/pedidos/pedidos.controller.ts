@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Body, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, ParseUUIDPipe, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { PedidosService } from './pedidos.service';
 import { CheckoutDto } from './dto/checkout.dto';
@@ -38,8 +38,17 @@ export class PedidosController {
   }
 
   @Patch(':id/status')
-  @ApiOperation({ summary: 'Atualizar status do pedido' })
-  atualizarStatus(@Param('id', ParseUUIDPipe) id: string, @Body('status') status: StatusPedido) {
-    return this.service.atualizarStatus(id, status);
+  @ApiOperation({ summary: 'Atualizar status do pedido (apenas cancelamento pelo cliente)' })
+  async atualizarStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body('status') status: StatusPedido,
+    @SessionId() sessionId: string,
+  ) {
+    if (status !== StatusPedido.CANCELADO) {
+      throw new NotFoundException('Apenas cancelamento permitido pela vitrine');
+    }
+    const pedido = await this.service.buscar(id, sessionId);
+    if (!pedido) throw new NotFoundException('Pedido não encontrado');
+    return this.service.atualizarStatus(id, status, sessionId);
   }
 }

@@ -24,6 +24,7 @@ enum TipoMovimentacao {
   SAIDA_VENDA
   SAIDA_AJUSTE
   PERDA
+  USO
   TRANSFERENCIA_ENTRADA
   TRANSFERENCIA_SAIDA
   INVENTARIO
@@ -145,6 +146,7 @@ model Negocio {
   caixas            Caixa[]
   mesas             Mesa[]
   contasReceber     ContaReceber[]
+  combos            Combo[]
 
   @@map("negocios")
 }
@@ -330,6 +332,8 @@ model Produto {
   controlaEstoque      Boolean        @default(true)
   vendaPorPeso         Boolean        @default(false)
   unidadeMedida        String         @default("un")
+  ncm                  String?
+  cfop                 String?
   criadoEm             DateTime       @default(now())
   atualizadoEm         DateTime       @updatedAt
 
@@ -340,6 +344,7 @@ model Produto {
   estoqueItem          EstoqueItem?
   carrinhoItens        CarrinhoItem[]
   pedidoItens          PedidoItem[]
+  comboItens           ComboItem[]
 
   @@unique([negocioId, plu])
   @@index([negocioId, status])
@@ -357,6 +362,38 @@ model ImagemProduto {
   produto    Produto @relation(fields: [produtoId], references: [id], onDelete: Cascade)
 
   @@map("imagens_produto")
+}
+
+model Combo {
+  id          String   @id @default(uuid())
+  negocioId   String
+  nome        String
+  descricao   String?
+  preco       Decimal  @db.Decimal(10, 2)
+  imagemUrl   String?
+  destaque    Boolean  @default(false)
+  ordem       Int      @default(0)
+  ativo       Boolean  @default(true)
+  criadoEm    DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  negocio     Negocio    @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  itens       ComboItem[]
+
+  @@index([negocioId, ativo])
+  @@map("combos")
+}
+
+model ComboItem {
+  id        String  @id @default(uuid())
+  comboId   String
+  produtoId String
+  quantidade Int     @default(1)
+
+  combo     Combo   @relation(fields: [comboId], references: [id], onDelete: Cascade)
+  produto   Produto @relation(fields: [produtoId], references: [id])
+
+  @@map("combos_itens")
 }
 
 model GrupoModificador {

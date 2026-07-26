@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { CategoriasService } from './categorias.service';
 import { CriarCategoriaDto } from './dto/criar-categoria.dto';
@@ -26,8 +26,8 @@ export class CategoriasController {
   @Get()
   @Roles(RoleNegocio.VISUALIZADOR)
   @ApiOperation({ summary: 'Listar categorias' })
-  findAll(@Param('businessId') negocioId: string) {
-    return this.service.findAll(negocioId);
+  findAll(@Param('businessId') negocioId: string, @Query('apenasAtivas') apenasAtivas?: string) {
+    return this.service.findAll(negocioId, apenasAtivas === 'true');
   }
 
   @Patch(':catId')

@@ -179,12 +179,40 @@ export class RelatoriosService {
 
     const pedidos = await this.prisma.pedido.findMany({
       where,
-      include: { pagamentos: true },
+      include: {
+        pagamentos: true,
+        itens: { include: { produto: { select: { precoCusto: true } } } },
+      },
     });
 
     const totalFaturamento = pedidos.reduce((acc, p) => acc + Number(p.total), 0);
     const totalPedidos = pedidos.length;
     const ticketMedio = totalPedidos > 0 ? totalFaturamento / totalPedidos : 0;
+
+    // Cálculo de lucro
+    let totalCusto = 0;
+    const lucroPorProduto: Record<string, { produtoNome: string; receita: number; custo: number; quantidade: number }> = {};
+
+    for (const p of pedidos) {
+      for (const item of p.itens) {
+        const qtd = Number(item.quantidade);
+        const receita = Number(item.precoUnitario) * qtd;
+        const custoUnitario = item.produto?.precoCusto ? Number(item.produto.precoCusto) : 0;
+        const custo = custoUnitario * qtd;
+        totalCusto += custo;
+
+        const key = item.produtoId;
+        if (!lucroPorProduto[key]) {
+          lucroPorProduto[key] = { produtoNome: item.produtoNome, receita: 0, custo: 0, quantidade: 0 };
+        }
+        lucroPorProduto[key].receita += receita;
+        lucroPorProduto[key].custo += custo;
+        lucroPorProduto[key].quantidade += qtd;
+      }
+    }
+
+    const lucroLiquido = totalFaturamento - totalCusto;
+    const margemMedia = totalFaturamento > 0 ? (lucroLiquido / totalFaturamento) * 100 : 0;
 
     const porMetodo: Record<string, number> = {};
     for (const p of pedidos) {
@@ -195,9 +223,20 @@ export class RelatoriosService {
 
     return {
       totalFaturamento,
+      totalCusto,
+      lucroLiquido,
+      margemMedia: Math.round(margemMedia * 100) / 100,
       totalPedidos,
       ticketMedio,
       porMetodoPagamento: Object.entries(porMetodo).map(([metodo, valor]) => ({ metodo, valor })),
+      lucroPorProduto: Object.entries(lucroPorProduto)
+        .map(([produtoId, dados]) => ({
+          produtoId,
+          ...dados,
+          lucro: dados.receita - dados.custo,
+          margem: dados.receita > 0 ? Math.round(((dados.receita - dados.custo) / dados.receita) * 100 * 100) / 100 : 0,
+        }))
+        .sort((a, b) => b.lucro - a.lucro),
     };
   }
 

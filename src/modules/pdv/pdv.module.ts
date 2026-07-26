@@ -6,9 +6,10 @@ import { ImprimirModule } from '../imprimir/imprimir.module';
 import { ProdutosModule } from '../produtos/produtos.module';
 import { CaixaModule } from '../caixa/caixa.module';
 import { ContasReceberModule } from '../contas-receber/contas-receber.module';
+import { FiscalModule } from '../fiscal/fiscal.module';
 
 @Module({
-  imports: [EstoqueModule, ImprimirModule, ProdutosModule, CaixaModule, ContasReceberModule],
+  imports: [EstoqueModule, ImprimirModule, ProdutosModule, CaixaModule, ContasReceberModule, FiscalModule],
   controllers: [PdvController],
   providers: [PdvService],
 })

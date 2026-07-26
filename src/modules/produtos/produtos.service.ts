@@ -462,7 +462,7 @@ export class ProdutosService {
       },
       orderBy: [{ destaque: 'desc' }, { ordem: 'asc' }, { criadoEm: 'desc' }],
       include: {
-        categoria: { select: { id: true, nome: true } },
+        categoria: { select: { id: true, nome: true, ordem: true } },
         imagens: { where: { principal: true }, take: 1 },
         gruposModificadores: {
           include: { opcoes: { where: { ativo: true } } },
@@ -471,7 +471,7 @@ export class ProdutosService {
       },
     });
 
-    const categoriasMap = new Map<string, { id: string; nome: string }>();
+    const categoriasMap = new Map<string, { id: string; nome: string; ordem: number }>();
     for (const p of produtos) {
       if (p.categoria && !categoriasMap.has(p.categoria.id)) {
         categoriasMap.set(p.categoria.id, p.categoria);
@@ -479,7 +479,15 @@ export class ProdutosService {
     }
 
     for (const p of produtos) this.normalizeImagens(p);
-    const result = { negocio, categorias: Array.from(categoriasMap.values()), produtos, aberto };
+    const combos = await this.prisma.combo.findMany({
+      where: { negocioId: negocio.id, ativo: true },
+      orderBy: [{ destaque: 'desc' }, { ordem: 'asc' }],
+      include: {
+        itens: { include: { produto: { select: { id: true, nome: true, preco: true } } } },
+      },
+    });
+
+    const result = { negocio, categorias: Array.from(categoriasMap.values()).sort((a, b) => (a.ordem ?? 999) - (b.ordem ?? 999)), produtos, combos, aberto };
     await this.redis.setex(cacheKey, 300, JSON.stringify(result));
     return result;
   }

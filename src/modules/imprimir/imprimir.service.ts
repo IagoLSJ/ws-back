@@ -174,21 +174,23 @@ export class ImprimirService {
       enviadoParaRede = await this.enviarParaImpressora(impressoraId, html);
     } else {
       // Se tem operador logado, tenta achar a impressora dele primeiro
-      let impressoras: any[];
       if (usuarioId) {
         const impDoOperador = await this.prisma.impressoraConfig.findFirst({
           where: { negocioId, ativo: true, tipoUso: 'OPERADOR', operadorId: usuarioId },
         });
         if (impDoOperador?.conexao === 'REDE' && impDoOperador.enderecoIp) {
-          const ok = await this.enviarTcp(impDoOperador.enderecoIp, impDoOperador.porta || 9100, html);
-          return { html, enviadoParaRede: ok };
+          enviadoParaRede = await this.enviarTcp(impDoOperador.enderecoIp, impDoOperador.porta || 9100, html);
         }
       }
-      // Fallback: imprime em qualquer impressora OPERADOR
-      impressoras = await this.prisma.impressoraConfig.findMany({ where: { negocioId, ativo: true, conexao: 'REDE', tipoUso: 'OPERADOR' } });
-      for (const imp of impressoras) {
-        const ok = await this.enviarTcp(imp.enderecoIp!, imp.porta!, html);
-        if (ok) enviadoParaRede = true;
+      // Fallback: imprime em qualquer impressora OPERADOR (se a do operador falhou ou não existe)
+      if (!enviadoParaRede) {
+        const impressoras = await this.prisma.impressoraConfig.findMany({ where: { negocioId, ativo: true, conexao: 'REDE', tipoUso: 'OPERADOR' } });
+        for (const imp of impressoras) {
+          if (imp.enderecoIp) {
+            const ok = await this.enviarTcp(imp.enderecoIp, imp.porta || 9100, html);
+            if (ok) { enviadoParaRede = true; break; }
+          }
+        }
       }
     }
 
@@ -240,25 +242,31 @@ export class ImprimirService {
     }
   }
 
-  private htmlToEscPos(html: string): Buffer {
+  private htmlToEscPos(html: string, papelLargura = 80): Buffer {
+    const maxLen = papelLargura === 58 ? 32 : 48;
+
     let text = html
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
       .replace(/<br\s*\/?>/gi, '\n')
       .replace(/<tr[^>]*>/gi, '')
       .replace(/<\/tr>/gi, '\n')
       .replace(/<td[^>]*>/gi, '')
-      .replace(/<\/td>/gi, ' ')
+      .replace(/<\/td>/gi, '\t')
+      .replace(/<th[^>]*>/gi, '')
+      .replace(/<\/th>/gi, '\t')
       .replace(/<div[^>]*>/gi, '')
       .replace(/<\/div>/gi, '\n')
       .replace(/<span[^>]*>/gi, '')
       .replace(/<\/span>/gi, '')
-      .replace(/<h1>/gi, '')
+      .replace(/<h1[^>]*>/gi, '')
       .replace(/<\/h1>/gi, '\n')
-      .replace(/<h2>/gi, '')
+      .replace(/<h2[^>]*>/gi, '')
       .replace(/<\/h2>/gi, '\n')
+      .replace(/<p[^>]*>/gi, '')
+      .replace(/<\/p>/gi, '\n')
       .replace(/<strong>/gi, '')
       .replace(/<\/strong>/gi, '')
-      .replace(/<hr>/gi, '\n-----------------------------\n')
+      .replace(/<hr[^>]*>/gi, '\n' + '-'.repeat(maxLen) + '\n')
       .replace(/<[^>]*>/g, '')
       .replace(/&nbsp;/g, ' ')
       .replace(/&amp;/g, '&')
@@ -266,30 +274,32 @@ export class ImprimirService {
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
       .replace(/&#39;/g, "'")
-      .replace(/\s*\n\s*/g, '\n')
+      .replace(/\t/g, ' ')
+      .replace(/[ ]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
       .trim();
 
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const lines = text.split('\n');
     const buf: number[] = [];
 
     buf.push(0x1B, 0x40);
     buf.push(0x1B, 0x61, 0x00);
 
     for (const line of lines) {
-      const isCenter = line.includes('☕');
-      const isBold = line.includes('COMANDA') || line.includes('TOTAL');
+      const trimmed = line.trim();
+      if (!trimmed) { buf.push(0x0A); continue; }
+
+      const isCenter = trimmed.includes('☕') || trimmed.includes('——');
+      const isBold = /COMANDA|CUPOM|TOTAL|R\$/.test(trimmed);
 
       if (isCenter) buf.push(0x1B, 0x61, 0x01);
       if (isBold) buf.push(0x1B, 0x45, 0x01);
 
-      const cleanLine = line.replace(/Endereco: |Endereço: /gi, '').replace(/☕/g, '').trim();
+      const cleanLine = trimmed.replace(/☕/g, '').trim();
       if (cleanLine) {
-        const maxLen = 48;
-        const lines = cleanLine.length > maxLen
-          ? [cleanLine.substring(0, maxLen), cleanLine.substring(maxLen)]
-          : [cleanLine];
-        for (const l of lines) {
-          const encoded = Buffer.from(l.trim().substring(0, maxLen) + '\n', 'latin1');
+        const wrapped = this.wordWrap(cleanLine, maxLen);
+        for (const w of wrapped) {
+          const encoded = Buffer.from(w + '\n', 'latin1');
           for (const b of encoded) buf.push(b);
         }
       }
@@ -298,8 +308,22 @@ export class ImprimirService {
       if (isCenter) buf.push(0x1B, 0x61, 0x00);
     }
 
-    buf.push(0x1B, 0x64, 0x03);
+    buf.push(0x1B, 0x64, 0x03, 0x1B, 0x69);
     return Buffer.from(buf);
+  }
+
+  private wordWrap(text: string, maxLen: number): string[] {
+    if (text.length <= maxLen) return [text];
+    const result: string[] = [];
+    let remaining = text;
+    while (remaining.length > 0) {
+      if (remaining.length <= maxLen) { result.push(remaining); break; }
+      let cut = remaining.lastIndexOf(' ', maxLen);
+      if (cut <= 0) cut = maxLen;
+      result.push(remaining.substring(0, cut));
+      remaining = remaining.substring(cut).trim();
+    }
+    return result;
   }
 
   private traduzirPagamento(metodo: string): string {
