@@ -1,35 +1,27 @@
--- Add USO to TipoMovimentacao enum
 ALTER TYPE "TipoMovimentacao" ADD VALUE IF NOT EXISTS 'USO';
 
--- Create combos table
-CREATE TABLE IF NOT EXISTS "combos" (
-    "id" TEXT NOT NULL,
-    "negocioId" TEXT NOT NULL,
-    "nome" TEXT NOT NULL,
-    "descricao" TEXT,
-    "preco" DECIMAL(10,2) NOT NULL,
-    "imagemUrl" TEXT,
-    "destaque" BOOLEAN NOT NULL DEFAULT false,
-    "ordem" INTEGER NOT NULL DEFAULT 0,
-    "ativo" BOOLEAN NOT NULL DEFAULT true,
-    "criadoEm" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "atualizadoEm" TIMESTAMP(3) NOT NULL,
-    CONSTRAINT "combos_pkey" PRIMARY KEY ("id")
+CREATE TABLE IF NOT EXISTS combos (
+    id TEXT PRIMARY KEY,
+    negocioId TEXT NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
+    nome TEXT NOT NULL,
+    descricao TEXT,
+    preco DECIMAL(10,2) NOT NULL,
+    imagemUrl TEXT,
+    destaque BOOLEAN NOT NULL DEFAULT false,
+    ordem INTEGER NOT NULL DEFAULT 0,
+    ativo BOOLEAN NOT NULL DEFAULT true,
+    criadoEm TIMESTAMP NOT NULL DEFAULT NOW(),
+    atualizadoEm TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Create combos_itens table
-CREATE TABLE IF NOT EXISTS "combos_itens" (
-    "id" TEXT NOT NULL,
-    "comboId" TEXT NOT NULL,
-    "produtoId" TEXT NOT NULL,
-    "quantidade" INTEGER NOT NULL DEFAULT 1,
-    CONSTRAINT "combos_itens_pkey" PRIMARY KEY ("id")
+CREATE INDEX IF NOT EXISTS idx_combos_negocio_ativo ON combos(negocioId, ativo);
+
+CREATE TABLE IF NOT EXISTS combos_itens (
+    id TEXT PRIMARY KEY,
+    comboId TEXT NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+    produtoId TEXT NOT NULL REFERENCES produtos(id),
+    quantidade INTEGER NOT NULL DEFAULT 1
 );
 
--- Add indexes
-CREATE INDEX IF NOT EXISTS "combos_negocioId_ativo_idx" ON "combos"("negocioId", "ativo");
-
--- Add foreign keys
-ALTER TABLE "combos" ADD CONSTRAINT IF NOT EXISTS "combos_negocioId_fkey" FOREIGN KEY ("negocioId") REFERENCES "negocios"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "combos_itens" ADD CONSTRAINT IF NOT EXISTS "combos_itens_comboId_fkey" FOREIGN KEY ("comboId") REFERENCES "combos"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "combos_itens" ADD CONSTRAINT IF NOT EXISTS "combos_itens_produtoId_fkey" FOREIGN KEY ("produtoId") REFERENCES "produtos"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ncm TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS cfop TEXT;

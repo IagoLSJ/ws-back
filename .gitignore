@@ -26,3 +26,12 @@ docker/nginx/certs/
 load-test/
 .env.*
 !.env.*.example
+importar-produtos-mercado.sql
+limpar-por-negocio.sql
+limpar-por-importados.sql
+limpar-importados.sql
+gerar-import-produtos.js
+parse-produtos.js
+produtos_*.txt
+/prisma/produtos.txt
+/prisma/migrate-producao.sql

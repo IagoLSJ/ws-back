@@ -165,6 +165,8 @@ model ConfiguracaoNegocio {
   chatbotAtivo          Boolean   @default(true)
   mensagemBoasVindas    String?
   mensagemFallback      String?
+  systemPrompt          String?
+  groqModelo            String    @default("llama-3.3-70b-versatile")
   cnpj                  String?
   ie                    String?
   razaoSocial           String?
@@ -495,6 +497,7 @@ model ClienteWhatsApp {
   nome            String?
   endereco        Json?    @db.Json
   modoHumano      Boolean  @default(false)
+  contexto        Json?    @db.Json
   ultimaInteracao DateTime @default(now())
   criadoEm        DateTime @default(now())
 

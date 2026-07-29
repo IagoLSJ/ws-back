@@ -1,18 +1,14 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { MetaWhatsappService } from './meta-whatsapp.service';
 import { TipoMensagemWhatsApp } from '@prisma/client';
 
 @Injectable()
 export class WhatsappAdminService {
-  private wahaUrl: string;
-
   constructor(
     private prisma: PrismaService,
-    private config: ConfigService,
-  ) {
-    this.wahaUrl = this.config.get<string>('WAHA_API_URL', 'http://localhost:3100');
-  }
+    private meta: MetaWhatsappService,
+  ) {}
 
   async listarConversas(businessId: string) {
     const clientes = await this.prisma.clienteWhatsApp.findMany({
@@ -33,7 +29,6 @@ export class WhatsappAdminService {
       modoHumano: c.modoHumano,
       ultimaInteracao: c.ultimaInteracao,
       ultimaMensagem: c.mensagens[0]?.texto || null,
-      totalMensagens: undefined,
     }));
   }
 
@@ -76,20 +71,8 @@ export class WhatsappAdminService {
       data: { ultimaInteracao: new Date() },
     });
 
-    try {
-      const chatId = cliente.telefone.includes('@') ? cliente.telefone : `${cliente.telefone}@c.us`;
-      await fetch(`${this.wahaUrl}/api/sendText`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chatId,
-          text: texto.trim(),
-          session: 'default',
-        }),
-      });
-    } catch {
-      // Falha ao enviar via WAHA não deve impedir o salvamento
-    }
+    const telefone = cliente.telefone.replace(/\D/g, '');
+    await this.meta.sendText(telefone, texto.trim());
 
     return mensagem;
   }

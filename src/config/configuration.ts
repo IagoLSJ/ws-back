@@ -20,4 +20,13 @@ export default () => ({
     accessExpires: process.env.JWT_ACCESS_EXPIRES || '15m',
     refreshExpires: process.env.JWT_REFRESH_EXPIRES || '7d',
   },
+  meta: {
+    token: process.env.META_WHATSAPP_TOKEN || '',
+    phoneNumberId: process.env.META_WHATSAPP_PHONE_NUMBER_ID || '',
+    verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || '',
+    apiVersion: process.env.META_API_VERSION || 'v22.0',
+  },
+  groq: {
+    apiKey: process.env.GROQ_API_KEY || '',
+  },
 });
