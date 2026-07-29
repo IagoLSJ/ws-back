@@ -53,13 +53,14 @@ export class ChatbotService {
     const systemPrompt = await this.montarSystemPrompt(negocioId, slug, config);
     const tools = this.montarFerramentas(negocioId, slug);
 
+    const groqModelo = (config as any).groqModelo;
     try {
       const resposta = await this.groq.generateResponse(
         systemPrompt,
         contexto.historico,
         texto,
         tools,
-        config.groqModelo || undefined,
+        groqModelo || undefined,
       );
 
       if (resposta.toolCalls.length > 0) {
@@ -103,7 +104,7 @@ export class ChatbotService {
       try {
         switch (name) {
           case 'listar_produtos': {
-            const produtos = await this.buscarProdutos(negocioId, args.busca as string);
+            const produtos = (await this.buscarProdutos(negocioId, args.busca as string)).map(p => ({ ...p, preco: Number(p.preco) }));
             respostaFinal += this.formatarProdutos(produtos);
             break;
           }
@@ -113,7 +114,7 @@ export class ChatbotService {
             break;
           }
           case 'buscar_pedido': {
-            const pedidos = await this.buscarPedidos(negocioId, slug, telefone);
+            const pedidos = (await this.buscarPedidos(negocioId, slug, telefone)).map(p => ({ ...p, total: Number(p.total) }));
             respostaFinal += this.formatarPedidos(pedidos);
             break;
           }
@@ -326,13 +327,7 @@ REGRAS IMPORTANTES:
     if (!cliente) return 'Erro: cliente nao encontrado.';
 
     let total = 0;
-    const itensPedido: Array<{
-      produtoId: string;
-      produtoNome: string;
-      precoUnitario: number;
-      quantidade: number;
-      modificadores: Record<string, unknown>;
-    }> = [];
+    const itensPedido: any[] = [];
 
     for (const item of itens) {
       const produtoNome = item.produtoNome as string;
@@ -459,7 +454,7 @@ REGRAS IMPORTANTES:
     } else {
       const updateData: Record<string, unknown> = { ultimaInteracao: new Date() };
       if (nome) updateData.nome = nome;
-      if (!cliente.contexto) updateData.contexto = { historico: [] };
+      if (!(cliente as any).contexto) updateData.contexto = { historico: [] };
       cliente = await this.prisma.clienteWhatsApp.update({
         where: { id: cliente.id },
         data: updateData as any,

@@ -33,5 +33,5 @@ limpar-importados.sql
 gerar-import-produtos.js
 parse-produtos.js
 produtos_*.txt
-/prisma/produtos.txt
-/prisma/migrate-producao.sql
+prisma/produtos.txt
+prisma/migrate-producao.sql
