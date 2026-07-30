@@ -58,4 +58,19 @@ export class AtualizarConfiguracaoDto {
   @IsOptional()
   @IsString()
   mensagemFallback?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  systemPrompt?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  groqModelo?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  metaPhoneNumberId?: string;
 }
