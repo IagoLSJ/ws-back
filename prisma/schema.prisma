@@ -167,6 +167,7 @@ model ConfiguracaoNegocio {
   mensagemFallback      String?
   systemPrompt          String?
   groqModelo            String    @default("llama-3.3-70b-versatile")
+  metaPhoneNumberId     String?   @unique
   cnpj                  String?
   ie                    String?
   razaoSocial           String?
