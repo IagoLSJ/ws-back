@@ -74,22 +74,37 @@ export class GroqService {
       body.tool_choice = 'auto';
     }
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    const inicio = Date.now();
+    const url = `${this.baseUrl}/chat/completions`;
+    this.logger.log(`[GROQ] POST ${url} | modelo=${model || this.defaultModel} | messages=${messages.length} | tools=${tools?.length || 0}`);
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (err: any) {
+      this.logger.error(`[GROQ] ERRO de rede ao chamar API: ${err.message}`);
+      throw err;
+    }
+
+    this.logger.log(`[GROQ] HTTP ${res.status} em ${Date.now() - inicio}ms`);
 
     if (!res.ok) {
       const text = await res.text();
-      this.logger.error(`Groq API error (${res.status}): ${text}`);
+      this.logger.error(`[GROQ] API error (${res.status}): ${text}`);
       throw new Error(`Groq API error: ${res.status} ${text}`);
     }
 
-    return res.json();
+    const data = await res.json();
+    const choice = data.choices?.[0];
+    this.logger.log(`[GROQ] resposta ok | finish_reason=${choice?.finish_reason} | tokens=${data.usage?.total_tokens} | tool_calls=${choice?.message?.tool_calls?.length || 0}`);
+    return data;
   }
 
   async chat(

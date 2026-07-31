@@ -19,10 +19,12 @@ class OpcaoModificadorDto {
 
   @IsOptional()
   @IsNumber()
+  @Min(0)
   precoExtra?: number;
 
   @IsOptional()
   @IsNumber()
+  @Min(0)
   ordem?: number;
 }
 
@@ -37,14 +39,17 @@ class GrupoModificadorDto {
 
   @IsOptional()
   @IsNumber()
+  @Min(0)
   minSelecao?: number;
 
   @IsOptional()
   @IsNumber()
+  @Min(0)
   maxSelecao?: number;
 
   @IsOptional()
   @IsNumber()
+  @Min(0)
   ordem?: number;
 
   @IsOptional()
@@ -100,6 +105,7 @@ export class AtualizarProdutoDto {
   @ApiPropertyOptional({ example: 12345 })
   @IsOptional()
   @IsNumber()
+  @Min(0)
   plu?: number;
 
   @ApiPropertyOptional({ example: 15.50 })
@@ -121,6 +127,7 @@ export class AtualizarProdutoDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
+  @Min(0)
   ordem?: number;
 
   @ApiPropertyOptional()

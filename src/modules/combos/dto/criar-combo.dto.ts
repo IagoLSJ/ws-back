@@ -38,6 +38,7 @@ export class CriarComboDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
+  @Min(0)
   ordem?: number;
 
   @ApiPropertyOptional()

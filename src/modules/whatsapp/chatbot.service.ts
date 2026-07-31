@@ -33,28 +33,41 @@ export class ChatbotService {
     nome: string | undefined,
     texto: string,
   ): Promise<{ telefone: string; texto: string }> {
+    this.logger.log(`========== [CHAT] INICIO ==========`);
+    this.logger.log(`[CHAT] negocioId=${negocioId} slug=${slug} telefone=${telefone} nome=${nome || '(sem nome)'}`);
+    this.logger.log(`[CHAT] mensagem recebida: "${texto}"`);
+
     const cliente = await this.obterOuCriarCliente(negocioId, telefone, nome);
+    this.logger.log(`[CHAT] cliente id=${cliente.id} modoHumano=${cliente.modoHumano}`);
 
     if (cliente.modoHumano) {
+      this.logger.log(`[CHAT] cliente em modo humano - nao processa com IA`);
       return { telefone, texto: '🔔 Sua mensagem foi encaminhada para nosso atendente.' };
     }
 
     await this.salvarMensagem(cliente.id, texto, TipoMensagemWhatsApp.CLIENTE);
+    this.logger.log(`[CHAT] mensagem do cliente salva no banco`);
 
     const config = await this.prisma.configuracaoNegocio.findUnique({
       where: { negocioId },
     });
+    this.logger.log(`[CHAT] config chatbotAtivo=${config?.chatbotAtivo} groqModelo=${(config as any)?.groqModelo || 'padrao'}`);
 
     if (!config?.chatbotAtivo) {
+      this.logger.warn(`[CHAT] chatbot desativado para negocio ${negocioId}`);
       return { telefone, texto: config?.mensagemFallback || 'Atendimento indisponivel no momento.' };
     }
 
     const contexto = await this.carregarContexto(slug, telefone, cliente);
+    this.logger.log(`[CHAT] contexto carregado - historico com ${contexto.historico.length} mensagens`);
+
     const systemPrompt = await this.montarSystemPrompt(negocioId, slug, config);
     const tools = this.montarFerramentas(negocioId, slug);
 
     const groqModelo = (config as any).groqModelo;
     try {
+      this.logger.log(`[GROQ] chamando API com ${contexto.historico.length + 1} mensagens no historico`);
+      const inicioGroq = Date.now();
       const resposta = await this.groq.generateResponse(
         systemPrompt,
         contexto.historico,
@@ -62,24 +75,36 @@ export class ChatbotService {
         tools,
         groqModelo || undefined,
       );
+      this.logger.log(`[GROQ] resposta em ${Date.now() - inicioGroq}ms | tokens=${resposta.tokens} | toolCalls=${resposta.toolCalls.length}`);
+      this.logger.log(`[GROQ] content=${JSON.stringify(resposta.content)}`);
+      if (resposta.toolCalls.length > 0) {
+        this.logger.log(`[GROQ] tool_calls: ${JSON.stringify(resposta.toolCalls.map(t => ({ name: t.function.name, args: t.function.arguments })))}`);
+      }
 
       if (resposta.toolCalls.length > 0) {
         return this.processarToolCalls(resposta.toolCalls, contexto, negocioId, slug, telefone, nome, config, cliente.id);
       }
 
       const respostaTexto = resposta.content || 'Desculpe, nao entendi. Pode reformular?';
+      this.logger.log(`[CHAT] resposta final: "${respostaTexto}"`);
 
       contexto.historico.push({ role: 'user', content: texto });
       contexto.historico.push({ role: 'assistant', content: respostaTexto });
       this.manterLimiteHistorico(contexto);
       await this.salvarContexto(slug, telefone, contexto, cliente);
+      this.logger.log(`[CHAT] contexto salvo - agora com ${contexto.historico.length} mensagens`);
 
       await this.salvarMensagem(cliente.id, respostaTexto, TipoMensagemWhatsApp.BOT);
+      this.logger.log(`[CHAT] resposta do bot salva no banco`);
+      this.logger.log(`========== [CHAT] FIM ==========`);
       return { telefone, texto: respostaTexto };
     } catch (err: any) {
-      this.logger.error(`Erro no chatbot Groq: ${err.message}`);
+      this.logger.error(`[CHAT] ERRO no chatbot Groq: ${err.message}`);
+      this.logger.error(`[CHAT] stack: ${err.stack}`);
       const fallback = config.mensagemFallback || 'Desculpe, ocorreu um erro. Tente novamente.';
       await this.salvarMensagem(cliente.id, fallback, TipoMensagemWhatsApp.BOT);
+      this.logger.log(`[CHAT] fallback enviado: "${fallback}"`);
+      this.logger.log(`========== [CHAT] FIM (erro) ==========`);
       return { telefone, texto: fallback };
     }
   }
@@ -95,26 +120,32 @@ export class ChatbotService {
     clienteId: string,
   ): Promise<{ telefone: string; texto: string }> {
     let respostaFinal = '';
+    this.logger.log(`[TOOLS] processando ${toolCalls.length} tool call(s)`);
 
     for (const toolCall of toolCalls) {
       const { name, arguments: argsStr } = toolCall.function;
       let args: Record<string, unknown> = {};
       try { args = JSON.parse(argsStr); } catch { args = {}; }
 
+      this.logger.log(`[TOOLS] executando: ${name} args=${JSON.stringify(args)}`);
+
       try {
         switch (name) {
           case 'listar_produtos': {
             const produtos = (await this.buscarProdutos(negocioId, args.busca as string)).map(p => ({ ...p, preco: Number(p.preco) }));
+            this.logger.log(`[TOOLS] listar_produtos encontrou ${produtos.length} produtos`);
             respostaFinal += this.formatarProdutos(produtos);
             break;
           }
           case 'criar_pedido': {
+            this.logger.log(`[TOOLS] criando pedido para ${telefone}`);
             const resultado = await this.criarPedido(negocioId, slug, telefone, nome, args, clienteId);
             respostaFinal += resultado;
             break;
           }
           case 'buscar_pedido': {
             const pedidos = (await this.buscarPedidos(negocioId, slug, telefone)).map(p => ({ ...p, total: Number(p.total) }));
+            this.logger.log(`[TOOLS] buscar_pedido retornou ${pedidos.length} pedidos`);
             respostaFinal += this.formatarPedidos(pedidos);
             break;
           }
@@ -133,14 +164,17 @@ export class ChatbotService {
               where: { id: clienteId },
               data: { modoHumano: true },
             });
+            this.logger.log(`[TOOLS] transferido para humano (cliente ${clienteId})`);
             respostaFinal += '⏳ Transferindo para um atendente humano.';
             break;
           }
           default:
+            this.logger.warn(`[TOOLS] ferramenta desconhecida: ${name}`);
             respostaFinal += `Ferramenta '${name}' nao reconhecida.`;
         }
       } catch (err: any) {
-        this.logger.error(`Erro na ferramenta ${name}: ${err.message}`);
+        this.logger.error(`[TOOLS] Erro na ferramenta ${name}: ${err.message}`);
+        this.logger.error(`[TOOLS] stack: ${err.stack}`);
         respostaFinal += `Erro ao processar: ${err.message}`;
       }
     }
@@ -148,6 +182,7 @@ export class ChatbotService {
     if (!respostaFinal.trim()) {
       respostaFinal = config.mensagemFallback || 'Desculpe, nao consegui processar.';
     }
+    this.logger.log(`[TOOLS] resposta final: "${respostaFinal}"`);
 
     contexto.historico.push({ role: 'user', content: `[ferramenta usada: ${toolCalls.map(t => t.function.name).join(', ')}]` });
     contexto.historico.push({ role: 'assistant', content: respostaFinal });
@@ -321,6 +356,8 @@ REGRAS IMPORTANTES:
     const endereco = args.endereco as string;
     const observacao = args.observacao as string;
 
+    this.logger.log(`[PEDIDO] args: itens=${itens.length} pagamento=${metodoPagamento} entrega=${tipoEntrega} endereco=${endereco || '(vazio)'}`);
+
     if (itens.length === 0) return 'Nao foi possivel criar o pedido: nenhum item informado.';
 
     const cliente = await this.prisma.clienteWhatsApp.findUnique({ where: { id: clienteId } });
@@ -342,10 +379,14 @@ REGRAS IMPORTANTES:
         select: { id: true, nome: true, preco: true },
       });
 
-      if (!produto) return `Produto "${produtoNome}" nao encontrado.`;
+      if (!produto) {
+        this.logger.warn(`[PEDIDO] produto "${produtoNome}" nao encontrado no negocio ${negocioId}`);
+        return `Produto "${produtoNome}" nao encontrado.`;
+      }
 
       const preco = Number(produto.preco) * quantidade;
       total += preco;
+      this.logger.log(`[PEDIDO] item: ${produto.nome} x${quantidade} = R$${preco.toFixed(2)}`);
 
       itensPedido.push({
         produtoId: produto.id,
@@ -355,6 +396,7 @@ REGRAS IMPORTANTES:
         modificadores: item.modificadores ? { descricao: item.modificadores } : {},
       });
     }
+    this.logger.log(`[PEDIDO] total do pedido: R$${total.toFixed(2)}`);
 
     const pedido = await this.prisma.pedido.create({
       data: {

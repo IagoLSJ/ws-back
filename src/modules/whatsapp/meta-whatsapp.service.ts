@@ -10,7 +10,7 @@ export class MetaWhatsappService {
   private readonly logger = new Logger(MetaWhatsappService.name);
   private readonly token: string;
   private readonly phoneNumberId: string;
-  private readonly apiVersion = 'v22.0';
+  private readonly apiVersion = 'v26.0';
   private readonly baseUrl: string;
 
   constructor(config: ConfigService) {
@@ -36,11 +36,13 @@ export class MetaWhatsappService {
   }
 
   async sendText(to: string, text: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    this.logger.log(`[META] sendText para ${to} | tamanho=${text.length} | preview="${text.slice(0, 60)}..."`);
     if (!this.token || !this.phoneNumberId) {
-      this.logger.error('Meta WhatsApp nao configurado');
+      this.logger.error(`[META] nao configurado: token=${!!this.token} phoneNumberId=${!!this.phoneNumberId}`);
       return { success: false, error: 'Meta WhatsApp nao configurado' };
     }
 
+    const inicio = Date.now();
     try {
       const res = await fetch(`${this.baseUrl}/${this.phoneNumberId}/messages`, {
         method: 'POST',
@@ -58,15 +60,18 @@ export class MetaWhatsappService {
       });
 
       const data = await res.json();
+      this.logger.log(`[META] sendText HTTP ${res.status} em ${Date.now() - inicio}ms`);
 
       if (!res.ok) {
-        this.logger.error(`Erro ao enviar mensagem: ${JSON.stringify(data)}`);
+        this.logger.error(`[META] erro ao enviar: ${JSON.stringify(data)}`);
         return { success: false, error: data.error?.message || 'Erro desconhecido' };
       }
 
-      return { success: true, messageId: data.messages?.[0]?.id };
+      const messageId = data.messages?.[0]?.id;
+      this.logger.log(`[META] mensagem enviada com sucesso, id=${messageId}`);
+      return { success: true, messageId };
     } catch (err: any) {
-      this.logger.error(`Erro ao enviar mensagem via Meta: ${err.message}`);
+      this.logger.error(`[META] erro de rede ao enviar: ${err.message}`);
       return { success: false, error: err.message };
     }
   }

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, IsBoolean } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsBoolean, Min } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class AtualizarCategoriaDto {
@@ -20,6 +20,7 @@ export class AtualizarCategoriaDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsInt()
+  @Min(0)
   ordem?: number;
 
   @ApiPropertyOptional()

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsInt, Min, MinLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CriarCategoriaDto {
@@ -20,5 +20,6 @@ export class CriarCategoriaDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsInt()
+  @Min(0)
   ordem?: number;
 }
