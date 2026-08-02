@@ -157,6 +157,7 @@ export class ImprimirService {
       subtotal: totalItens,
       desconto: 0,
       taxaFrete,
+      taxaCartao: pedido.taxaCartao ? Number(pedido.taxaCartao) : undefined,
       total: Number(pedido.total),
       formaPagamento: pagamento ? this.traduzirPagamento(pagamento.metodo) : 'N/A',
       troco: pedido.troco ? Number(pedido.troco) : undefined,

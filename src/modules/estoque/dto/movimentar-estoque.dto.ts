@@ -1,4 +1,4 @@
-import { IsEnum, IsInt, IsString, IsOptional, Min } from 'class-validator';
+import { IsEnum, IsNumber, IsString, IsOptional, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { TipoMovimentacao } from '@prisma/client';
 
@@ -8,8 +8,8 @@ export class MovimentarEstoqueDto {
   tipo!: TipoMovimentacao;
 
   @ApiProperty({ example: 10 })
-  @IsInt()
-  @Min(1)
+  @IsNumber()
+  @Min(0)
   quantidade!: number;
 
   @ApiPropertyOptional()

@@ -149,7 +149,9 @@ export class RelatoriosService {
 
     const headers = ['Produto', 'Status', 'Qtd Atual', 'Estoque Mínimo', 'Unidade', 'Situação', 'Valor Estimado'];
     const rows = itens.map((item) => {
-      const situacao = item.quantidadeAtual <= 0 ? 'ZERADO' : item.quantidadeAtual <= item.estoqueMinimo ? 'CRÍTICO' : 'OK';
+      const quantidadeAtual = Number(item.quantidadeAtual);
+      const estoqueMinimo = Number(item.estoqueMinimo);
+      const situacao = quantidadeAtual <= 0 ? 'ZERADO' : quantidadeAtual <= estoqueMinimo ? 'CRÍTICO' : 'OK';
       return [
         item.produto?.nome || item.nome || 'Sem nome',
         item.produto?.status || 'AVULSO',
@@ -157,7 +159,7 @@ export class RelatoriosService {
         item.estoqueMinimo.toString(),
         item.unidade,
         situacao,
-        item.produto?.preco ? (Number(item.produto.preco) * item.quantidadeAtual).toFixed(2) : '0',
+        item.produto?.preco ? (Number(item.produto.preco) * Number(item.quantidadeAtual)).toFixed(2) : '0',
       ];
     });
 

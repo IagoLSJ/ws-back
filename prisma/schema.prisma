@@ -157,6 +157,7 @@ model ConfiguracaoNegocio {
   controleEstoqueAtivo  Boolean   @default(true)
   estoqueMinimoPadrao   Int       @default(5)
   taxaFrete             Decimal   @default(0) @db.Decimal(10, 2)
+  taxaCartaoFaixas      Json?
   webhookUrl            String?
   emailAlertas          String?
   horarioFuncionamento  Json?
@@ -166,7 +167,8 @@ model ConfiguracaoNegocio {
   mensagemBoasVindas    String?
   mensagemFallback      String?
   systemPrompt          String?
-  groqModelo            String    @default("llama-3.3-70b-versatile")
+  modeloIa              String    @default("gemini-2.0-flash")
+  cardapioImagens       Json?
   metaPhoneNumberId     String?   @unique
   cnpj                  String?
   ie                    String?
@@ -435,8 +437,8 @@ model EstoqueItem {
   nome            String?
   sku             String?
   precoCusto      Decimal?        @db.Decimal(10, 2)
-  quantidadeAtual Int             @default(0)
-  estoqueMinimo   Int             @default(5)
+  quantidadeAtual Decimal         @default(0) @db.Decimal(10, 3)
+  estoqueMinimo   Decimal         @default(5) @db.Decimal(10, 3)
   unidade         String          @default("un")
   criadoEm        DateTime        @default(now())
   atualizadoEm    DateTime        @updatedAt
@@ -455,9 +457,9 @@ model MovimentacaoEstoque {
   estoqueItemId   String
   usuarioId       String?
   tipo            TipoMovimentacao
-  quantidade      Int
-  quantidadeAntes Int
-  quantidadeApos  Int
+  quantidade      Decimal            @db.Decimal(10, 3)
+  quantidadeAntes Decimal            @db.Decimal(10, 3)
+  quantidadeApos  Decimal            @db.Decimal(10, 3)
   motivo          String?
   referencia      String?
   criadoEm        DateTime           @default(now())
@@ -639,6 +641,7 @@ model Pedido {
   serieNfe            String?
   tributosAproximados Decimal?   @db.Decimal(10, 2)
   troco               Decimal?   @db.Decimal(10, 2)
+  taxaCartao          Decimal    @default(0) @db.Decimal(10, 2)
   mesaId              String?
   mesaNumero          Int?
   criadoEm            DateTime   @default(now())

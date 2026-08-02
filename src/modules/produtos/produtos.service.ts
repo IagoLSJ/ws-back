@@ -114,7 +114,13 @@ export class ProdutosService {
 
   async findAllPDV() {
     const produtos = await this.prisma.produto.findMany({
-      where: { status: 'ATIVO' },
+      where: {
+        status: 'ATIVO',
+        OR: [
+          { controlaEstoque: false },
+          { estoqueItem: { quantidadeAtual: { gt: 0 } } },
+        ],
+      },
       orderBy: [{ ordem: 'asc' }, { criadoEm: 'desc' }],
       include: {
         categoria: true,
@@ -381,6 +387,9 @@ export class ProdutosService {
     }
 
     if (!produto) throw new NotFoundException('Produto não encontrado para este código');
+    if (produto.controlaEstoque && Number(produto.estoqueItem?.quantidadeAtual ?? 0) <= 0) {
+      throw new NotFoundException('Produto não encontrado para este código');
+    }
     this.normalizeImagens(produto);
     return produto;
   }
@@ -459,6 +468,10 @@ export class ProdutosService {
       where: {
         negocioId: negocio.id,
         status: 'ATIVO',
+        OR: [
+          { controlaEstoque: false },
+          { estoqueItem: { quantidadeAtual: { gt: 0 } } },
+        ],
       },
       orderBy: [{ destaque: 'desc' }, { ordem: 'asc' }, { criadoEm: 'desc' }],
       include: {

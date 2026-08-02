@@ -15,6 +15,7 @@ interface DadosCupom {
   subtotal: number;
   desconto: number;
   taxaFrete: number;
+  taxaCartao?: number;
   total: number;
   formaPagamento: string;
   troco?: number;
@@ -48,7 +49,7 @@ export function gerarCupomHtml(dados: DadosCupom): string {
       <td colspan="4" style="font-size:12px;font-weight:bold;padding-top:4px">${i.quantidade}x ${i.nome}</td>
       <td style="font-size:12px;text-align:right;padding-top:4px">${totalItem}</td>
     </tr>
-    <tr><td colspan="5" style="font-size:9px;color:#666;padding-left:6px">und.: R$ ${unit}${i.modificadores?.length ? ' | ' + i.modificadores.join(', ') : ''}</td></tr>
+    <tr><td colspan="5" style="font-size:9px;color:#000;padding-left:6px">und.: R$ ${unit}${i.modificadores?.length ? ' | ' + i.modificadores.join(', ') : ''}</td></tr>
   `}).join('');
 
   const tributoHtml = dados.tributosAproximados && dados.tributosAproximados > 0
@@ -59,21 +60,21 @@ export function gerarCupomHtml(dados: DadosCupom): string {
 <style>
   @page { margin: 0; size: 80mm 400mm; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Courier New', monospace; font-size: 11px; padding: 4mm 3mm; color: #000; }
-  h1 { text-align: center; font-size: 14px; margin-bottom: 1px; }
-  h2 { text-align: center; font-size: 11px; font-weight: bold; margin-bottom: 4px; }
-  hr { border: none; border-top: 1px dashed #000; margin: 4px 0; }
+  body { font-family: 'Courier New', monospace; font-size: 11px; padding: 4mm 3mm; color: #000; font-weight: 600; }
+  h1 { text-align: center; font-size: 15px; font-weight: bold; margin-bottom: 1px; }
+  h2 { text-align: center; font-size: 12px; font-weight: bold; margin-bottom: 4px; }
+  hr { border: none; border-top: 2px dashed #000; margin: 4px 0; }
   .header { text-align: center; font-size: 10px; margin-bottom: 4px; }
   .header b { font-size: 11px; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  td { padding: 1px 2px; vertical-align: top; }
-  .total-row td { font-size: 14px; font-weight: bold; padding-top: 3px; }
-  .footer { text-align: center; margin-top: 8px; font-size: 9px; padding-top: 4px; }
-  .obs { margin-top: 4px; font-size: 10px; color: #e11d48; }
+  td { padding: 1px 2px; vertical-align: top; color: #000; }
+  .total-row td { font-size: 15px; font-weight: bold; padding-top: 3px; }
+  .footer { text-align: center; margin-top: 8px; font-size: 9px; font-weight: 700; padding-top: 4px; color: #000; }
+  .obs { margin-top: 4px; font-size: 10px; font-weight: bold; color: #c81e1e; }
   .qr { text-align: center; margin: 6px 0; }
   .qr img { width: 120px; height: 120px; image-rendering: pixelated; }
-  .chave { text-align: center; font-size: 10px; font-weight: bold; letter-spacing: 1px; word-break: break-all; margin: 2px 0; }
-  .small { font-size: 9px; color: #555; }
+  .chave { text-align: center; font-size: 10px; font-weight: bold; letter-spacing: 1px; word-break: break-all; margin: 2px 0; color: #000; }
+  .small { font-size: 9px; color: #000; }
 </style></head><body>
   <h1>${dados.razaoSocial || dados.negocioNome}</h1>
   <div class="header">
@@ -105,6 +106,7 @@ export function gerarCupomHtml(dados: DadosCupom): string {
     <tr><td colspan="4">Subtotal</td><td style="text-align:right">R$ ${dados.subtotal.toFixed(2)}</td></tr>
     ${dados.desconto > 0 ? `<tr><td colspan="4">Desconto</td><td style="text-align:right">- R$ ${dados.desconto.toFixed(2)}</td></tr>` : ''}
     ${dados.taxaFrete > 0 ? `<tr><td colspan="4">Frete</td><td style="text-align:right">R$ ${dados.taxaFrete.toFixed(2)}</td></tr>` : ''}
+    ${dados.taxaCartao ? `<tr><td colspan="4">Taxa cartão</td><td style="text-align:right">+ R$ ${dados.taxaCartao.toFixed(2)}</td></tr>` : ''}
     ${tributoHtml}
     <tr class="total-row"><td colspan="4">TOTAL A PAGAR</td><td style="text-align:right">R$ ${dados.total.toFixed(2)}</td></tr>
   </table>

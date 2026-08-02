@@ -55,6 +55,16 @@ export class EstoqueController {
     return this.service.transferir(negocioId, dto, usuarioId);
   }
 
+  @Post('zerar-negativos')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Zerar todos os itens de estoque com quantidade negativa' })
+  zerarNegativos(
+    @Param('businessId') negocioId: string,
+    @CurrentUser('id') usuarioId: string,
+  ) {
+    return this.service.zerarNegativos(negocioId, usuarioId);
+  }
+
   @Get(':itemId')
    @Roles(RoleNegocio.GERENTE, RoleNegocio.OPERADOR, RoleNegocio.SUPER_ADMIN)
   @ApiOperation({ summary: 'Obter item de estoque' })

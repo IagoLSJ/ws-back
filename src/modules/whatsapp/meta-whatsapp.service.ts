@@ -10,16 +10,18 @@ export class MetaWhatsappService {
   private readonly logger = new Logger(MetaWhatsappService.name);
   private readonly token: string;
   private readonly phoneNumberId: string;
-  private readonly apiVersion = 'v26.0';
   private readonly baseUrl: string;
 
   constructor(config: ConfigService) {
     this.token = config.get<string>('meta.token') || '';
     this.phoneNumberId = config.get<string>('meta.phoneNumberId') || '';
-    this.baseUrl = `https://graph.facebook.com/${this.apiVersion}`;
+    const apiVersion = config.get<string>('meta.apiVersion') || 'v22.0';
+    const base = (config.get<string>('meta.baseUrl') || 'https://graph.facebook.com').replace(/\/+$/, '');
+    this.baseUrl = `${base}/${apiVersion}`;
+    this.logger.log(`[META] baseUrl=${this.baseUrl} | phoneNumberId=${this.phoneNumberId || '(vazio)'}`);
 
     if (!this.token || !this.phoneNumberId) {
-      this.logger.warn('Meta WhatsApp configuracao incompleta');
+      this.logger.warn('[META] configuracao incompleta');
     }
   }
 
@@ -97,6 +99,50 @@ export class MetaWhatsappService {
     }
   }
 
+  async sendImage(
+    to: string,
+    link: string,
+    caption?: string,
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    this.logger.log(`[META] sendImage para ${to} | link=${link}`);
+    if (!this.token || !this.phoneNumberId) {
+      return { success: false, error: 'Meta WhatsApp nao configurado' };
+    }
+
+    try {
+      const res = await fetch(`${this.baseUrl}/${this.phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to,
+          type: 'image',
+          image: {
+            link,
+            ...(caption ? { caption } : {}),
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        this.logger.error(`[META] erro ao enviar imagem: ${JSON.stringify(data)}`);
+        return { success: false, error: data.error?.message || 'Erro desconhecido' };
+      }
+
+      const messageId = data.messages?.[0]?.id;
+      this.logger.log(`[META] imagem enviada com sucesso, id=${messageId}`);
+      return { success: true, messageId };
+    } catch (err: any) {
+      this.logger.error(`[META] erro de rede ao enviar imagem: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
+
   async sendInteractiveButtons(
     to: string,
     body: string,
@@ -156,5 +202,29 @@ export class MetaWhatsappService {
     } catch {
       // opcional
     }
+  }
+
+  async getMedia(mediaId: string): Promise<{ buffer: Buffer; mimeType: string }> {
+    this.logger.log(`[META] getMedia ${mediaId}`);
+    if (!this.token) throw new Error('Meta WhatsApp nao configurado');
+
+    const infoRes = await fetch(`${this.baseUrl}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+    });
+    if (!infoRes.ok) {
+      const text = await infoRes.text();
+      throw new Error(`Erro ao obter media info (${infoRes.status}): ${text}`);
+    }
+    const info = await infoRes.json();
+
+    const url = info.url;
+    const mimeType = info.mime_type || 'audio/ogg';
+    if (!url) throw new Error('Media sem URL retornada pela Meta');
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Erro ao baixar media (${res.status})`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    this.logger.log(`[META] media baixada: ${buffer.length} bytes | mime=${mimeType}`);
+    return { buffer, mimeType };
   }
 }

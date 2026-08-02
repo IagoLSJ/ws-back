@@ -1,4 +1,4 @@
-import { IsOptional, IsInt, IsString, Min, Max } from 'class-validator';
+import { IsOptional, IsInt, IsString, Min } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
@@ -15,7 +15,6 @@ export class ListarEstoqueDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(100)
   limit?: number = 20;
 
   @ApiPropertyOptional()

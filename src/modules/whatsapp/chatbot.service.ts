@@ -1,14 +1,48 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { RedisService } from '../../infra/cache/redis.service';
-import { GroqService, GroqTool, GroqToolCall } from './groq.service';
+import { GeminiService } from './gemini.service';
 import { MetaWhatsappService } from './meta-whatsapp.service';
 import { ImprimirService } from '../imprimir/imprimir.service';
 import { MetodoPagamento, ProdutoStatus, TipoMensagemWhatsApp, TipoEntrega } from '@prisma/client';
 
+interface ItemRascunho {
+  produtoNome: string;
+  quantidade: number;
+  modificadores?: string;
+  observacao?: string;
+  produtoId?: string;
+  precoUnitario?: number;
+}
+
+interface PedidoRascunho {
+  itens: ItemRascunho[];
+  endereco?: string;
+  pagamento?: string;
+  tipoEntrega?: string;
+  observacao?: string;
+}
+
 interface ContextoConversa {
   historico: { role: 'user' | 'assistant'; content: string }[];
-  dadosPedido?: Record<string, unknown>;
+  estado?: string;
+  pedidoRascunho?: PedidoRascunho | null;
+}
+
+interface RespostaIa {
+  resposta: string;
+  acao: string;
+  intencao: string;
+  dadosExtraidos: Record<string, unknown>;
+  faltando: string[];
+}
+
+interface ConfigChatbot {
+  mensagemBoasVindas?: string | null;
+  mensagemFallback?: string | null;
+  systemPrompt?: string | null;
+  modeloIa?: string | null;
+  cardapioImagens?: unknown;
 }
 
 const MAX_HISTORICO = 20;
@@ -21,7 +55,7 @@ export class ChatbotService {
   constructor(
     private prisma: PrismaService,
     private redis: RedisService,
-    private groq: GroqService,
+    private gemini: GeminiService,
     private meta: MetaWhatsappService,
     private imprimirService: ImprimirService,
   ) {}
@@ -32,7 +66,7 @@ export class ChatbotService {
     telefone: string,
     nome: string | undefined,
     texto: string,
-  ): Promise<{ telefone: string; texto: string }> {
+  ): Promise<{ telefone: string; texto: string; imagens?: string[] }> {
     this.logger.log(`========== [CHAT] INICIO ==========`);
     this.logger.log(`[CHAT] negocioId=${negocioId} slug=${slug} telefone=${telefone} nome=${nome || '(sem nome)'}`);
     this.logger.log(`[CHAT] mensagem recebida: "${texto}"`);
@@ -51,57 +85,57 @@ export class ChatbotService {
     const config = await this.prisma.configuracaoNegocio.findUnique({
       where: { negocioId },
     });
-    this.logger.log(`[CHAT] config chatbotAtivo=${config?.chatbotAtivo} groqModelo=${(config as any)?.groqModelo || 'padrao'}`);
+    this.logger.log(`[CHAT] config chatbotAtivo=${config?.chatbotAtivo} modeloIa=${(config as any)?.modeloIa || 'padrao'}`);
 
     if (!config?.chatbotAtivo) {
       this.logger.warn(`[CHAT] chatbot desativado para negocio ${negocioId}`);
       return { telefone, texto: config?.mensagemFallback || 'Atendimento indisponivel no momento.' };
     }
 
-    const contexto = await this.carregarContexto(slug, telefone, cliente);
-    this.logger.log(`[CHAT] contexto carregado - historico com ${contexto.historico.length} mensagens`);
+    const configChat: ConfigChatbot = config as ConfigChatbot;
+    const modeloIa = configChat.modeloIa;
 
-    const systemPrompt = await this.montarSystemPrompt(negocioId, slug, config);
-    const tools = this.montarFerramentas(negocioId, slug);
-
-    const groqModelo = (config as any).groqModelo;
     try {
-      this.logger.log(`[GROQ] chamando API com ${contexto.historico.length + 1} mensagens no historico`);
-      const inicioGroq = Date.now();
-      const resposta = await this.groq.generateResponse(
-        systemPrompt,
-        contexto.historico,
-        texto,
-        tools,
-        groqModelo || undefined,
-      );
-      this.logger.log(`[GROQ] resposta em ${Date.now() - inicioGroq}ms | tokens=${resposta.tokens} | toolCalls=${resposta.toolCalls.length}`);
-      this.logger.log(`[GROQ] content=${JSON.stringify(resposta.content)}`);
-      if (resposta.toolCalls.length > 0) {
-        this.logger.log(`[GROQ] tool_calls: ${JSON.stringify(resposta.toolCalls.map(t => ({ name: t.function.name, args: t.function.arguments })))}`);
-      }
+      const resultado = await this.comLock(`${slug}:${telefone}`, async () => {
+        const contexto = await this.carregarContexto(slug, telefone, cliente);
+        this.logger.log(`[CHAT] contexto carregado - historico com ${contexto.historico.length} mensagens | estado=${contexto.estado || 'INICIAL'}`);
 
-      if (resposta.toolCalls.length > 0) {
-        return this.processarToolCalls(resposta.toolCalls, contexto, negocioId, slug, telefone, nome, config, cliente.id);
-      }
+        const systemPrompt = await this.montarSystemPrompt(negocioId, configChat, contexto);
 
-      const respostaTexto = resposta.content || 'Desculpe, nao entendi. Pode reformular?';
-      this.logger.log(`[CHAT] resposta final: "${respostaTexto}"`);
+        this.logger.log(`[GEMINI] chamando API com ${contexto.historico.length + 1} mensagens no historico`);
+        const inicio = Date.now();
+        const resposta = await this.gemini.generateResponse(
+          systemPrompt,
+          contexto.historico,
+          texto,
+          modeloIa || undefined,
+        );
+        this.logger.log(`[GEMINI] resposta em ${Date.now() - inicio}ms | tokens=${resposta.tokens}`);
+        this.logger.log(`[GEMINI] content=${JSON.stringify(resposta.content)}`);
 
-      contexto.historico.push({ role: 'user', content: texto });
-      contexto.historico.push({ role: 'assistant', content: respostaTexto });
-      this.manterLimiteHistorico(contexto);
-      await this.salvarContexto(slug, telefone, contexto, cliente);
-      this.logger.log(`[CHAT] contexto salvo - agora com ${contexto.historico.length} mensagens`);
+        const parsed = this.parseRespostaJson(resposta.content);
+        this.logger.log(`[CHAT] intencao=${parsed.intencao} | acao=${parsed.acao} | dados=${JSON.stringify(parsed.dadosExtraidos)} | faltando=${JSON.stringify(parsed.faltando)}`);
 
-      await this.salvarMensagem(cliente.id, respostaTexto, TipoMensagemWhatsApp.BOT);
-      this.logger.log(`[CHAT] resposta do bot salva no banco`);
+        const resultado = await this.executarAcao(parsed, contexto, negocioId, slug, telefone, nome, configChat, cliente);
+        this.logger.log(`[CHAT] resposta final: "${resultado.texto}" | imagens=${resultado.imagens?.length || 0}`);
+
+        contexto.historico.push({ role: 'user', content: texto });
+        contexto.historico.push({ role: 'assistant', content: resultado.texto });
+        this.manterLimiteHistorico(contexto);
+        await this.salvarContexto(slug, telefone, contexto, cliente);
+        this.logger.log(`[CHAT] contexto salvo - estado=${contexto.estado || 'INICIAL'} | historico=${contexto.historico.length}`);
+
+        await this.salvarMensagem(cliente.id, resultado.texto, TipoMensagemWhatsApp.BOT);
+        this.logger.log(`[CHAT] resposta do bot salva no banco`);
+        return resultado;
+      });
+
       this.logger.log(`========== [CHAT] FIM ==========`);
-      return { telefone, texto: respostaTexto };
+      return { telefone, texto: resultado.texto, ...(resultado.imagens?.length ? { imagens: resultado.imagens } : {}) };
     } catch (err: any) {
-      this.logger.error(`[CHAT] ERRO no chatbot Groq: ${err.message}`);
+      this.logger.error(`[CHAT] ERRO no chatbot Gemini: ${err.message}`);
       this.logger.error(`[CHAT] stack: ${err.stack}`);
-      const fallback = config.mensagemFallback || 'Desculpe, ocorreu um erro. Tente novamente.';
+      const fallback = configChat.mensagemFallback || 'Desculpe, ocorreu um erro. Tente novamente.';
       await this.salvarMensagem(cliente.id, fallback, TipoMensagemWhatsApp.BOT);
       this.logger.log(`[CHAT] fallback enviado: "${fallback}"`);
       this.logger.log(`========== [CHAT] FIM (erro) ==========`);
@@ -109,294 +143,276 @@ export class ChatbotService {
     }
   }
 
-  private async processarToolCalls(
-    toolCalls: GroqToolCall[],
+  /**
+   * Serializa o processamento por conversa: se outra mensagem do mesmo cliente
+   * estiver sendo processada, aguarda (fila FIFO) até liberar. Conversas
+   * diferentes continuam em paralelo.
+   */
+  private async comLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const lockKey = `chatbot:lock:${key}`;
+    const prazo = Date.now() + 30000;
+
+    while (Date.now() < prazo) {
+      const adquirido = await this.redis.set(lockKey, '1', 45, true).catch(() => true);
+      if (adquirido) {
+        try {
+          return await fn();
+        } finally {
+          await this.redis.del(lockKey).catch(() => {});
+        }
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    this.logger.warn(`[CHAT] lock nao adquirido em tempo (${key}) - processando sem serializacao`);
+    return fn();
+  }
+
+  private parseRespostaJson(content: string | null): RespostaIa {
+    const fallback: RespostaIa = {
+      resposta: content || 'Desculpe, não entendi. Pode reformular?',
+      acao: 'responder',
+      intencao: '',
+      dadosExtraidos: {},
+      faltando: [],
+    };
+    if (!content) return fallback;
+
+    let limpo = content.trim();
+    limpo = limpo.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+
+    try {
+      const parsed = JSON.parse(limpo);
+      return {
+        resposta: typeof parsed.resposta === 'string' ? parsed.resposta : '',
+        acao: typeof parsed.acao === 'string' ? parsed.acao : 'responder',
+        intencao: typeof parsed.intencao === 'string' ? parsed.intencao : '',
+        dadosExtraidos: (parsed.dadosExtraidos && typeof parsed.dadosExtraidos === 'object' ? parsed.dadosExtraidos : {}),
+        faltando: Array.isArray(parsed.faltando) ? parsed.faltando.map(String) : [],
+      };
+    } catch {
+      this.logger.warn('[CHAT] JSON invalido do LLM - tratando como resposta direta');
+      return fallback;
+    }
+  }
+
+  private async executarAcao(
+    parsed: RespostaIa,
     contexto: ContextoConversa,
     negocioId: string,
     slug: string,
     telefone: string,
     nome: string | undefined,
-    config: { mensagemBoasVindas?: string | null; mensagemFallback?: string | null; groqModelo?: string | null },
-    clienteId: string,
-  ): Promise<{ telefone: string; texto: string }> {
-    let respostaFinal = '';
-    this.logger.log(`[TOOLS] processando ${toolCalls.length} tool call(s)`);
+    config: ConfigChatbot,
+    cliente: { id: string; sessionId: string },
+  ): Promise<{ texto: string; imagens?: string[] }> {
+    const acao = parsed.acao || 'responder';
+    let texto = '';
+    let imagens: string[] = [];
 
-    for (const toolCall of toolCalls) {
-      const { name, arguments: argsStr } = toolCall.function;
-      let args: Record<string, unknown> = {};
-      try { args = JSON.parse(argsStr); } catch { args = {}; }
-
-      this.logger.log(`[TOOLS] executando: ${name} args=${JSON.stringify(args)}`);
-
-      try {
-        switch (name) {
-          case 'listar_produtos': {
-            const produtos = (await this.buscarProdutos(negocioId, args.busca as string)).map(p => ({ ...p, preco: Number(p.preco) }));
-            this.logger.log(`[TOOLS] listar_produtos encontrou ${produtos.length} produtos`);
-            respostaFinal += this.formatarProdutos(produtos);
-            break;
-          }
-          case 'criar_pedido': {
-            this.logger.log(`[TOOLS] criando pedido para ${telefone}`);
-            const resultado = await this.criarPedido(negocioId, slug, telefone, nome, args, clienteId);
-            respostaFinal += resultado;
-            break;
-          }
-          case 'buscar_pedido': {
-            const pedidos = (await this.buscarPedidos(negocioId, slug, telefone)).map(p => ({ ...p, total: Number(p.total) }));
-            this.logger.log(`[TOOLS] buscar_pedido retornou ${pedidos.length} pedidos`);
-            respostaFinal += this.formatarPedidos(pedidos);
-            break;
-          }
-          case 'info_negocio': {
-            const info = await this.buscarInfoNegocio(negocioId);
-            respostaFinal += info;
-            break;
-          }
-          case 'horario_funcionamento': {
-            const horario = await this.buscarHorario(negocioId);
-            respostaFinal += horario;
-            break;
-          }
-          case 'transferir_para_humano': {
-            await this.prisma.clienteWhatsApp.update({
-              where: { id: clienteId },
-              data: { modoHumano: true },
-            });
-            this.logger.log(`[TOOLS] transferido para humano (cliente ${clienteId})`);
-            respostaFinal += '⏳ Transferindo para um atendente humano.';
-            break;
-          }
-          default:
-            this.logger.warn(`[TOOLS] ferramenta desconhecida: ${name}`);
-            respostaFinal += `Ferramenta '${name}' nao reconhecida.`;
+    switch (acao) {
+      case 'mostrar_cardapio': {
+        const cardapioImagens = Array.isArray(config.cardapioImagens) ? (config.cardapioImagens as string[]) : [];
+        if (cardapioImagens.length > 0) {
+          imagens = [...cardapioImagens];
+          texto = parsed.resposta || 'Aqui está o nosso cardápio! 😋';
+        } else {
+          const produtos = await this.buscarProdutos(negocioId);
+          texto = 'Claro! Aqui está nosso cardápio:\n\n' + this.formatarProdutos(this.normalizarProdutos(produtos));
         }
-      } catch (err: any) {
-        this.logger.error(`[TOOLS] Erro na ferramenta ${name}: ${err.message}`);
-        this.logger.error(`[TOOLS] stack: ${err.stack}`);
-        respostaFinal += `Erro ao processar: ${err.message}`;
+        break;
+      }
+      case 'listar_produtos': {
+        const busca = typeof parsed.dadosExtraidos.busca === 'string' ? parsed.dadosExtraidos.busca : undefined;
+        const produtos = await this.buscarProdutos(negocioId, busca);
+        texto = this.formatarProdutos(this.normalizarProdutos(produtos));
+        break;
+      }
+      case 'consultar_status': {
+        const pedidos = await this.buscarPedidos(negocioId, slug, telefone);
+        texto = this.formatarPedidos(pedidos.map(p => ({ ...p, total: Number(p.total) })));
+        break;
+      }
+      case 'info_negocio': {
+        const info = await this.buscarInfoNegocio(negocioId);
+        texto = info;
+        break;
+      }
+      case 'horario_funcionamento': {
+        const horario = await this.buscarHorario(negocioId);
+        texto = horario;
+        break;
+      }
+      case 'chamar_humano': {
+        await this.prisma.clienteWhatsApp.update({
+          where: { id: cliente.id },
+          data: { modoHumano: true },
+        });
+        this.logger.log(`[CHAT] transferido para humano (cliente ${cliente.id})`);
+        texto = '⏳ Transferindo para um atendente humano.';
+        break;
+      }
+      case 'confirmar_pedido': {
+        const resultado = await this.confirmarPedido(parsed, contexto, negocioId);
+        contexto.estado = resultado.estado;
+        texto = resultado.texto;
+        break;
+      }
+      case 'criar_pedido': {
+        const resultado = await this.criarPedidoConfirmado(contexto, negocioId, slug, telefone, nome, cliente);
+        texto = resultado.texto;
+        if (resultado.sucesso) {
+          contexto.pedidoRascunho = null;
+          contexto.estado = 'INICIAL';
+        }
+        break;
+      }
+      case 'perguntar':
+      case 'responder':
+      default: {
+        texto = parsed.resposta || config.mensagemFallback || 'Desculpe, não entendi. Pode reformular?';
+        break;
       }
     }
 
-    if (!respostaFinal.trim()) {
-      respostaFinal = config.mensagemFallback || 'Desculpe, nao consegui processar.';
-    }
-    this.logger.log(`[TOOLS] resposta final: "${respostaFinal}"`);
-
-    contexto.historico.push({ role: 'user', content: `[ferramenta usada: ${toolCalls.map(t => t.function.name).join(', ')}]` });
-    contexto.historico.push({ role: 'assistant', content: respostaFinal });
-    this.manterLimiteHistorico(contexto);
-    await this.salvarContexto(slug, telefone, contexto, await this.prisma.clienteWhatsApp.findUnique({ where: { id: clienteId } }));
-
-    await this.salvarMensagem(clienteId, respostaFinal, TipoMensagemWhatsApp.BOT);
-    return { telefone, texto: respostaFinal };
+    return { texto, ...(imagens.length ? { imagens } : {}) };
   }
 
-  private async montarSystemPrompt(negocioId: string, slug: string, config: { systemPrompt?: string | null; mensagemBoasVindas?: string | null }): Promise<string> {
-    const negocio = await this.prisma.negocio.findUnique({
-      where: { id: negocioId },
-      include: {
-        categorias: { where: { ativo: true }, take: 30 },
-        taxasFreteBairro: { where: { ativo: true } },
-      },
-    });
-
-    const base = config.systemPrompt || '';
-    const categorias = negocio?.categorias.map(c => c.nome).join(', ') || '';
-    const bairros = negocio?.taxasFreteBairro.map(t => t.bairro).join(', ') || '';
-
-    return `Voce e um atendente virtual de ${negocio?.nome || 'uma empresa'}.
-Use linguagem informal e simpatia, sempre em portugues brasileiro.
-
-${base ? `Instrucoes personalizadas: ${base}` : ''}
-
-Informacoes do negocio:
-- Nome: ${negocio?.nome || ''}
-- Categorias: ${categorias}
-- Bairros de entrega: ${bairros}
-
-${config.mensagemBoasVindas ? `Mensagem de boas-vindas: ${config.mensagemBoasVindas}` : ''}
-
-VOCE TEM ACESSO AS FERRAMENTAS abaixo. Use SEMPRE ferramentas quando necessario:
-1. listar_produtos - para buscar produtos quando o cliente perguntar
-2. criar_pedido - para finalizar pedido depois de coletar: produtos, modificadores, endereco, pagamento
-3. buscar_pedido - para verificar status
-4. info_negocio - informacoes gerais
-5. horario_funcionamento - horarios
-6. transferir_para_humano - quando o cliente pedir ou precisar de atendimento humano
-
-REGRAS IMPORTANTES:
-- Colete as informacoes necessarias ANTES de chamar criar_pedido (produtos, modificadores, endereco, forma de pagamento)
-- Confirme com o cliente antes de finalizar
-- Se o cliente digitar "cardapio" ou "cardapio", use listar_produtos
-- Seja breve e direto
-- Nao invente informacoes - use as ferramentas`;
-  }
-
-  private montarFerramentas(negocioId: string, slug: string): GroqTool[] {
-    return [
-      {
-        type: 'function',
-        function: {
-          name: 'listar_produtos',
-          description: 'Busca produtos disponiveis no cardapio. Use quando o cliente pedir o cardapio, menu, ou perguntar por produtos.',
-          parameters: {
-            type: 'object',
-            properties: {
-              busca: {
-                type: 'string',
-                description: 'Termo de busca opcional para filtrar produtos (ex: "hamburguer", "suco", "pizza"). Se vazio, lista todos.',
-              },
-            },
-          },
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'criar_pedido',
-          description: 'Cria um novo pedido. Chame SOMENTE depois de coletar todas as informacoes do cliente (produtos com modificadores, endereco, forma de pagamento) e confirmar com ele.',
-          parameters: {
-            type: 'object',
-            properties: {
-              itens: {
-                type: 'array',
-                description: 'Lista de itens do pedido',
-                items: {
-                  type: 'object',
-                  properties: {
-                    produtoNome: { type: 'string', description: 'Nome do produto' },
-                    quantidade: { type: 'number', description: 'Quantidade (padrao: 1)' },
-                    modificadores: { type: 'string', description: 'Descricao dos modificadores escolhidos ex: "Borda: Catupiry, Tamanho: Grande"' },
-                    observacao: { type: 'string', description: 'Observacao opcional' },
-                  },
-                },
-              },
-              metodoPagamento: { type: 'string', description: 'Forma de pagamento: DINHEIRO, CARTAO_CREDITO, CARTAO_DEBITO, PIX' },
-              tipoEntrega: { type: 'string', description: 'ENTREGA ou RETIRADA' },
-              endereco: { type: 'string', description: 'Endereco completo de entrega (obrigatorio se for ENTREGA)' },
-              observacao: { type: 'string', description: 'Observacao geral do pedido' },
-            },
-            required: ['itens', 'metodoPagamento', 'tipoEntrega'],
-          },
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'buscar_pedido',
-          description: 'Busca os pedidos recentes do cliente para mostrar o status.',
-          parameters: { type: 'object', properties: {} },
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'info_negocio',
-          description: 'Retorna informacoes gerais sobre o negocio (descricao, contato, etc).',
-          parameters: { type: 'object', properties: {} },
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'horario_funcionamento',
-          description: 'Retorna os horarios de funcionamento do negocio.',
-          parameters: { type: 'object', properties: {} },
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'transferir_para_humano',
-          description: 'Transfere o atendimento para um atendente humano. Use quando o cliente pedir explicitamente para falar com atendente, suporte, ou quando nao conseguir resolver.',
-          parameters: { type: 'object', properties: {} },
-        },
-      },
-    ];
-  }
-
-  private async buscarProdutos(negocioId: string, busca?: string) {
-    const where: Record<string, unknown> = {
-      negocioId,
-      status: ProdutoStatus.ATIVO,
-    };
-    if (busca) {
-      where.nome = { contains: busca, mode: 'insensitive' };
-    }
-
-    return this.prisma.produto.findMany({
-      where,
-      select: { id: true, nome: true, preco: true, descricao: true },
-      orderBy: { ordem: 'asc' },
-      take: 50,
-    });
-  }
-
-  private formatarProdutos(produtos: { id: string; nome: string; preco: number; descricao?: string | null }[]): string {
-    if (produtos.length === 0) return 'Nenhum produto encontrado.';
-
-    return produtos.map((p) =>
-      `• ${p.nome} - R$ ${Number(p.preco).toFixed(2)}${p.descricao ? `\n  ${p.descricao}` : ''}`
-    ).join('\n');
-  }
-
-  private async criarPedido(
+  private async confirmarPedido(
+    parsed: RespostaIa,
+    contexto: ContextoConversa,
     negocioId: string,
-    slug: string,
-    telefone: string,
-    nome: string | undefined,
-    args: Record<string, unknown>,
-    clienteId: string,
-  ): Promise<string> {
-    const itens = args.itens as Array<Record<string, unknown>> || [];
-    const metodoPagamento = (args.metodoPagamento as string) || 'PIX';
-    const tipoEntrega = (args.tipoEntrega as string) || 'ENTREGA';
-    const endereco = args.endereco as string;
-    const observacao = args.observacao as string;
+  ): Promise<{ texto: string; estado: string }> {
+    const dados = parsed.dadosExtraidos;
+    const itensBrutos = Array.isArray(dados.itens) ? dados.itens as Array<Record<string, unknown>> : [];
 
-    this.logger.log(`[PEDIDO] args: itens=${itens.length} pagamento=${metodoPagamento} entrega=${tipoEntrega} endereco=${endereco || '(vazio)'}`);
+    if (itensBrutos.length === 0 && (!contexto.pedidoRascunho || !contexto.pedidoRascunho.itens.length)) {
+      return {
+        texto: parsed.resposta || 'Me diz o que você quer pedir, que eu anoto! 😄',
+        estado: 'COLETANDO',
+      };
+    }
 
-    if (itens.length === 0) return 'Nao foi possivel criar o pedido: nenhum item informado.';
+    const validacao = await this.validarItensPedido(negocioId, itensBrutos.length ? itensBrutos : (contexto.pedidoRascunho?.itens as unknown as Array<Record<string, unknown>>));
 
-    const cliente = await this.prisma.clienteWhatsApp.findUnique({ where: { id: clienteId } });
-    if (!cliente) return 'Erro: cliente nao encontrado.';
+    if (validacao.pendente) {
+      const sugestoes = await this.buscarProdutos(negocioId, validacao.pendente);
+      if (sugestoes.length > 0) {
+        const nomes = sugestoes.map(s => s.nome).join(', ');
+        return {
+          texto: `Não achei exatamente "${validacao.pendente}", mas temos: ${nomes}. Qual desses você quer?`,
+          estado: contexto.estado || 'COLETANDO',
+        };
+      }
+      return {
+        texto: `Hmm, não temos "${validacao.pendente}" no momento 😕 Quer ver o cardápio? Posso te mostrar!`,
+        estado: contexto.estado || 'COLETANDO',
+      };
+    }
 
-    let total = 0;
-    const itensPedido: any[] = [];
+    const endereco = typeof dados.endereco === 'string' && dados.endereco.trim() ? dados.endereco : undefined;
+    const pagamento = typeof dados.pagamento === 'string' && dados.pagamento.trim() ? dados.pagamento.toUpperCase() : undefined;
+    const tipoEntrega = typeof dados.tipoEntrega === 'string' && dados.tipoEntrega.trim() ? dados.tipoEntrega.toUpperCase() : undefined;
+    const observacao = typeof dados.observacao === 'string' && dados.observacao.trim() ? dados.observacao : undefined;
 
-    for (const item of itens) {
-      const produtoNome = item.produtoNome as string;
-      const quantidade = (item.quantidade as number) || 1;
+    contexto.pedidoRascunho = {
+      itens: validacao.itens,
+      endereco,
+      pagamento,
+      tipoEntrega,
+      observacao,
+    };
 
-      const produto = await this.prisma.produto.findFirst({
+    const resumo = this.resumirPedido(contexto.pedidoRascunho);
+    return {
+      texto: `📋 *Confirma seu pedido?*\n\n${resumo}\n\nÉ isso mesmo?`,
+      estado: 'CONFIRMAR',
+    };
+  }
+
+  private async validarItensPedido(
+    negocioId: string,
+    itens: Array<Record<string, unknown>>,
+  ): Promise<{ itens: ItemRascunho[]; pendente: string | null }> {
+    const validos: ItemRascunho[] = [];
+
+    for (const raw of itens) {
+      const nomeBuscado = String(raw.produtoNome || '').trim();
+      const quantidade = Math.max(1, Number(raw.quantidade) || 1);
+      if (!nomeBuscado) continue;
+
+      let produto = await this.prisma.produto.findFirst({
         where: {
           negocioId,
-          nome: { contains: produtoNome, mode: 'insensitive' },
+          nome: { contains: nomeBuscado, mode: 'insensitive' },
           status: ProdutoStatus.ATIVO,
         },
         select: { id: true, nome: true, preco: true },
       });
 
       if (!produto) {
-        this.logger.warn(`[PEDIDO] produto "${produtoNome}" nao encontrado no negocio ${negocioId}`);
-        return `Produto "${produtoNome}" nao encontrado.`;
+        produto = await this.buscarProdutoPorModificador(negocioId, nomeBuscado);
+      }
+      if (!produto) {
+        produto = await this.buscarProdutoPorTexto(negocioId, nomeBuscado);
       }
 
-      const preco = Number(produto.preco) * quantidade;
-      total += preco;
-      this.logger.log(`[PEDIDO] item: ${produto.nome} x${quantidade} = R$${preco.toFixed(2)}`);
+      if (!produto) {
+        return { itens: validos, pendente: nomeBuscado };
+      }
 
-      itensPedido.push({
+      validos.push({
         produtoId: produto.id,
         produtoNome: produto.nome,
-        precoUnitario: Number(produto.preco),
         quantidade,
-        modificadores: item.modificadores ? { descricao: item.modificadores } : {},
+        precoUnitario: Number(produto.preco),
+        modificadores: typeof raw.modificadores === 'string' ? raw.modificadores : undefined,
+        observacao: typeof raw.observacao === 'string' ? raw.observacao : undefined,
       });
     }
-    this.logger.log(`[PEDIDO] total do pedido: R$${total.toFixed(2)}`);
+
+    return { itens: validos, pendente: null };
+  }
+
+  private resumirPedido(r: PedidoRascunho): string {
+    const linhas = r.itens.map(
+      (i) => `${i.quantidade}x ${i.produtoNome}${i.modificadores ? ` (${i.modificadores})` : ''} - R$ ${((i.precoUnitario || 0) * i.quantidade).toFixed(2)}`,
+    );
+    const total = r.itens.reduce((acc, i) => acc + (i.precoUnitario || 0) * i.quantidade, 0);
+    let resumo = linhas.join('\n') + `\n*Total: R$ ${total.toFixed(2)}*`;
+    if (r.pagamento) resumo += `\nPagamento: ${r.pagamento}`;
+    if (r.endereco) resumo += `\nEntrega: ${r.endereco}`;
+    else if (r.tipoEntrega === 'ENTREGA') resumo += '\nEntrega: (informe o endereço)';
+    else resumo += '\nRetirada no local';
+    if (r.observacao) resumo += `\nObservação: ${r.observacao}`;
+    return resumo;
+  }
+
+  private async criarPedidoConfirmado(
+    contexto: ContextoConversa,
+    negocioId: string,
+    slug: string,
+    telefone: string,
+    nome: string | undefined,
+    cliente: { id: string; sessionId: string },
+  ): Promise<{ texto: string; sucesso: boolean }> {
+    const rascunho = contexto.pedidoRascunho;
+    if (!rascunho || !rascunho.itens.length) {
+      return { texto: 'Não tenho um pedido em andamento para confirmar. 😅', sucesso: false };
+    }
+
+    const total = rascunho.itens.reduce((acc, i) => acc + (i.precoUnitario || 0) * i.quantidade, 0);
+    const metodoPagamento = rascunho.pagamento || 'PIX';
+    const tipoEntrega = rascunho.tipoEntrega === 'ENTREGA' ? 'ENTREGA' : 'RETIRADA';
+    const endereco = rascunho.endereco;
+
+    const itensPedido = rascunho.itens.map((i) => ({
+      produtoId: i.produtoId!,
+      produtoNome: i.produtoNome,
+      precoUnitario: i.precoUnitario!,
+      quantidade: i.quantidade,
+      modificadores: i.modificadores ? { descricao: i.modificadores } : {},
+    }));
 
     const pedido = await this.prisma.pedido.create({
       data: {
@@ -407,10 +423,8 @@ REGRAS IMPORTANTES:
         tipoEntrega: tipoEntrega as TipoEntrega,
         endereco: endereco ? { enderecoCompleto: endereco } : undefined,
         contato: telefone,
-        observacao: observacao || undefined,
-        itens: {
-          create: itensPedido,
-        },
+        observacao: rascunho.observacao || undefined,
+        itens: { create: itensPedido },
         pagamentos: {
           create: {
             valor: total,
@@ -422,9 +436,179 @@ REGRAS IMPORTANTES:
       include: { itens: true, pagamentos: true },
     });
 
+    this.logger.log(`[PEDIDO] criado #${pedido.id} | total=R$${total.toFixed(2)} | pagamento=${metodoPagamento} | entrega=${tipoEntrega}`);
     this.imprimirService.imprimirComanda(negocioId, pedido.id).catch(() => {});
 
-    return `✅ *Pedido Confirmado!* #${pedido.id.slice(0, 8).toUpperCase()}\nTotal: R$ ${total.toFixed(2)}\nPagamento: ${metodoPagamento}\n${endereco ? `Endereco: ${endereco}` : `Retirada no local`}\n\nAgradecemos a preferencia!`;
+    return {
+      texto: `✅ *Pedido Confirmado!* #${pedido.id.slice(0, 8).toUpperCase()}\nTotal: R$ ${total.toFixed(2)}\nPagamento: ${metodoPagamento}\n${endereco ? `Endereço: ${endereco}` : 'Retirada no local'}\n\nAgradecemos a preferência! 😊`,
+      sucesso: true,
+    };
+  }
+
+  private async montarSystemPrompt(
+    negocioId: string,
+    config: ConfigChatbot,
+    contexto: ContextoConversa,
+  ): Promise<string> {
+    const negocio = await this.prisma.negocio.findUnique({
+      where: { id: negocioId },
+      select: { nome: true },
+    });
+
+    const base = config.systemPrompt || '';
+    const estado = contexto.estado || 'INICIAL';
+    const pedidoResumo = contexto.pedidoRascunho ? this.resumirPedido(contexto.pedidoRascunho) : '';
+
+    return `Você é ${negocio?.nome || 'um atendente virtual'}, atendente de WhatsApp. Fale português brasileiro, informal e simpático.
+${base ? `Instruções do dono do negócio: ${base}` : ''}
+
+SEU PAPEL:
+- Você NÃO vê o cardápio e NÃO inventa produtos, preços ou disponibilidade.
+- Você decide a AÇÃO certa e extrai os dados do pedido. O sistema executa as ações.
+
+ESTADO ATUAL:
+- Etapa: ${estado}
+${pedidoResumo ? `- Pedido em andamento:\n${pedidoResumo}` : '- Sem pedido em andamento'}
+
+AÇÕES:
+- "responder": conversa simples.
+- "perguntar": precisa de mais informação (use "faltando" para indicar o que falta).
+- "mostrar_cardapio": cliente pediu cardápio/menu.
+- "listar_produtos": cliente perguntou por produto específico (preencha dadosExtraidos.busca).
+- "consultar_status": cliente pediu status/andamento do pedido.
+- "info_negocio": cliente pediu informações do negócio.
+- "horario_funcionamento": cliente perguntou horário.
+- "chamar_humano": cliente pediu atendente humano.
+- "confirmar_pedido": coletou TODOS os dados do pedido (itens, pagamento e endereço se ENTREGA). O sistema mostra o resumo com preços reais.
+- "criar_pedido": o cliente CONFIRMOU o resumo mostrado anteriormente (etapa CONFIRMAR).
+
+REGRAS DE PEDIDO:
+- Extraia itens: nome do produto, quantidade, modificadores/sabores, observação.
+- Pagamentos válidos: PIX, DINHEIRO, CARTAO_CREDITO, CARTAO_DEBITO.
+- tipoEntrega: ENTREGA ou RETIRADA (se ENTREGA, precisa de endereço).
+- Se faltar informação, use "perguntar" e aponte em "faltando".
+- NUNCA diga que um produto existe antes do sistema confirmar.
+- Depois do resumo, espere o cliente confirmar antes de "criar_pedido".
+
+Responda APENAS com JSON (sem markdown):
+{"resposta": "mensagem para o cliente", "acao": "...", "intencao": "...", "dadosExtraidos": {"itens": [{"produtoNome": "...", "quantidade": 1, "modificadores": "...", "observacao": "..."}], "endereco": "...", "pagamento": "PIX", "tipoEntrega": "RETIRADA", "observacao": "...", "busca": "..."}, "faltando": []}`;
+  }
+
+  private async buscarProdutos(negocioId: string, busca?: string) {
+    const where: Record<string, unknown> = {
+      negocioId,
+      status: ProdutoStatus.ATIVO,
+    };
+    if (busca) {
+      where.OR = [
+        { nome: { contains: busca, mode: 'insensitive' } },
+        { descricao: { contains: busca, mode: 'insensitive' } },
+        { gruposModificadores: { some: { opcoes: { some: { nome: { contains: busca, mode: 'insensitive' } } } } } },
+      ];
+    }
+
+    return this.prisma.produto.findMany({
+      where,
+      select: {
+        id: true,
+        nome: true,
+        preco: true,
+        descricao: true,
+        gruposModificadores: {
+          where: { opcoes: { some: { ativo: true } } },
+          select: {
+            nome: true,
+            obrigatorio: true,
+            opcoes: { where: { ativo: true }, orderBy: { ordem: 'asc' }, select: { nome: true, precoExtra: true } },
+          },
+        },
+      },
+      orderBy: { ordem: 'asc' },
+      take: 50,
+    });
+  }
+
+  private async buscarProdutoPorModificador(negocioId: string, texto: string) {
+    const normalize = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+    const opcoes = await this.prisma.opcaoModificador.findMany({
+      where: { ativo: true, grupo: { produto: { negocioId, status: ProdutoStatus.ATIVO } } },
+      select: { nome: true },
+    });
+
+    let resto = normalize(texto);
+    for (const o of opcoes) {
+      resto = resto.split(normalize(o.nome)).join(' ');
+    }
+    resto = resto.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    if (!resto) return null;
+
+    return this.prisma.produto.findFirst({
+      where: { negocioId, status: ProdutoStatus.ATIVO, nome: { contains: resto, mode: 'insensitive' } },
+      select: { id: true, nome: true, preco: true },
+    });
+  }
+
+  private async buscarProdutoPorTexto(negocioId: string, texto: string) {
+    const normalize = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const alvo = normalize(texto);
+
+    const produtos = await this.prisma.produto.findMany({
+      where: { negocioId, status: ProdutoStatus.ATIVO },
+      select: { id: true, nome: true, preco: true },
+      take: 200,
+    });
+
+    let melhor: (typeof produtos)[number] | null = null;
+    let melhorLen = 0;
+    for (const p of produtos) {
+      const n = normalize(p.nome);
+      if (n.length >= 3 && alvo.includes(n) && n.length > melhorLen) {
+        melhor = p;
+        melhorLen = n.length;
+      }
+    }
+    return melhor;
+  }
+
+  private normalizarProdutos(produtos: Array<{
+    id: string;
+    nome: string;
+    preco: { toNumber: () => number } | number;
+    descricao?: string | null;
+    gruposModificadores?: Array<{ nome: string; obrigatorio: boolean; opcoes: Array<{ nome: string; precoExtra: { toNumber: () => number } | number }> }>;
+  }>) {
+    return produtos.map(p => ({
+      ...p,
+      preco: Number(p.preco),
+      gruposModificadores: (p.gruposModificadores || []).map(g => ({
+        ...g,
+        opcoes: g.opcoes.map(o => ({ ...o, precoExtra: Number(o.precoExtra) })),
+      })),
+    }));
+  }
+
+  private formatarProdutos(produtos: Array<{
+    id: string;
+    nome: string;
+    preco: number;
+    descricao?: string | null;
+    gruposModificadores?: Array<{ nome: string; obrigatorio: boolean; opcoes: Array<{ nome: string; precoExtra: number }> }>;
+  }>): string {
+    if (produtos.length === 0) return 'Hmm, não encontrei nada com esse nome no nosso cardápio 😕 Que tal dar uma olhada no cardápio completo? Posso te mostrar!';
+
+    return produtos.map((p) => {
+      let linha = `• ${p.nome} - R$ ${Number(p.preco).toFixed(2)}`;
+      if (p.descricao) linha += `\n  ${p.descricao}`;
+      for (const g of p.gruposModificadores || []) {
+        const opcoes = g.opcoes
+          .map((o) => (Number(o.precoExtra) > 0 ? `${o.nome} (+R$${Number(o.precoExtra).toFixed(2)})` : o.nome))
+          .join(', ');
+        linha += `\n  ${g.nome}${g.obrigatorio ? ' (obrigatorio)' : ''}: ${opcoes}`;
+      }
+      return linha;
+    }).join('\n');
   }
 
   private async buscarPedidos(negocioId: string, slug: string, telefone: string) {
@@ -527,7 +711,7 @@ REGRAS IMPORTANTES:
       } catch {}
     }
 
-    return { historico: [] };
+    return { historico: [], estado: 'INICIAL' };
   }
 
   private async salvarContexto(slug: string, telefone: string, contexto: ContextoConversa, cliente: { id: string } | null): Promise<void> {

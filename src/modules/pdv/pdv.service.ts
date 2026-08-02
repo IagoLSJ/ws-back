@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { RedisService } from '../../infra/cache/redis.service';
 import { EstoqueService } from '../estoque/estoque.service';
 import { ImprimirService } from '../imprimir/imprimir.service';
 import { CaixaService } from '../caixa/caixa.service';
@@ -8,6 +9,8 @@ import { FiscalService } from '../fiscal/fiscal.service';
 import { FinalizarPdvDto } from './dto/finalizar-pdv.dto';
 import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao } from '@prisma/client';
 import { calcularPrecoFinal } from '../../common/utils/preco';
+import { converterPeso } from '../../common/utils/unidade';
+import { calcularTaxaCartao } from '../../common/utils/taxa-cartao';
 
 function aplicarDesconto(
   valor: number,
@@ -29,6 +32,7 @@ export class PdvService {
     private caixaService: CaixaService,
     private contasReceberService: ContasReceberService,
     private fiscalService: FiscalService,
+    private redis: RedisService,
   ) {}
 
   async checkout(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string) {
@@ -87,13 +91,33 @@ export class PdvService {
 
     let total = itensData.reduce((acc, i) => acc + i.precoUnitario * i.quantidade, 0);
     total = aplicarDesconto(total, dto.descontoTotal);
-    const valorTotal = Math.max(0, Math.round(total * 100) / 100);
+    let valorTotal = Math.max(0, Math.round(total * 100) / 100);
+
+    // Taxa de cartão (repasse): faixa aplicada a crédito e débito
+    let taxaCartao = 0;
+    const ehCartao =
+      dto.pagamento.metodo === MetodoPagamento.CARTAO_CREDITO ||
+      dto.pagamento.metodo === MetodoPagamento.CARTAO_DEBITO;
+    if (ehCartao) {
+      const config = await this.prisma.configuracaoNegocio.findUnique({ where: { negocioId } });
+      const faixas = Array.isArray(config?.taxaCartaoFaixas)
+        ? (config.taxaCartaoFaixas as { ate: number; valor: number }[])
+        : [];
+      taxaCartao = calcularTaxaCartao(valorTotal, faixas);
+      valorTotal = Math.round((valorTotal + taxaCartao) * 100) / 100;
+    }
 
     const troco = dto.pagamento.valorPago && dto.pagamento.valorPago > valorTotal
       ? Math.round((dto.pagamento.valorPago - valorTotal) * 100) / 100
       : undefined;
 
     const isCrediario = dto.pagamento.metodo === MetodoPagamento.CREDIARIO;
+
+    const dadosPagamento: any = {};
+    if (dto.pagamento.valorPago) dadosPagamento.valorPago = dto.pagamento.valorPago;
+    if (taxaCartao > 0) {
+      dadosPagamento.taxaCartao = taxaCartao;
+    }
 
     if (isCrediario) {
       if (!dto.clienteId) throw new BadRequestException('Selecione um cliente para venda a prazo');
@@ -126,6 +150,7 @@ export class PdvService {
           clienteCpf: dto.clienteCpf || undefined,
           clienteNome: dto.clienteNome || undefined,
           troco: troco || undefined,
+          taxaCartao: taxaCartao || undefined,
           itens: { create: itensData.map(i => ({
             produtoId: i.produtoId,
             produtoNome: i.produtoNome,
@@ -138,7 +163,7 @@ export class PdvService {
               valor: valorTotal,
               metodo: dto.pagamento.metodo,
               status: isCrediario ? StatusPagamento.PENDENTE : StatusPagamento.APROVADO,
-              ...(dto.pagamento.valorPago ? { dadosPagamento: { valorPago: dto.pagamento.valorPago } } : {}),
+              ...(Object.keys(dadosPagamento).length ? { dadosPagamento } : {}),
             },
           },
         },
@@ -148,22 +173,28 @@ export class PdvService {
       // Movimentação de estoque dentro da transação
       for (const item of p.itens) {
         const produto = produtos.find((pr) => pr.id === item.produtoId);
-        if (!produto?.controlaEstoque || produto.vendaPorPeso) continue;
+        if (!produto?.controlaEstoque) continue;
         const ei = await tx.estoqueItem.findFirst({
           where: { negocioId, produtoId: item.produtoId },
+        }) ?? await tx.estoqueItem.findFirst({
+          where: { produtoId: item.produtoId },
         });
-        if (!ei || Number(ei.quantidadeAtual) < Number(item.quantidade)) {
+        // Venda por peso: a quantidade é informada em kg e convertida para a unidade do estoque
+        const qtd = produto.vendaPorPeso
+          ? converterPeso(Number(item.quantidade), 'kg', ei?.unidade)
+          : Number(item.quantidade);
+        const qtdAtual = Number(ei?.quantidadeAtual ?? 0);
+        if (!ei || qtdAtual < qtd) {
           throw new BadRequestException(`Estoque insuficiente para "${produto!.nome}"`);
         }
-        const qtd = Number(item.quantidade);
-        const qtdAntes = Number(ei.quantidadeAtual);
+        const qtdAntes = qtdAtual;
         await tx.estoqueItem.update({
           where: { id: ei.id },
           data: { quantidadeAtual: { decrement: qtd } },
         });
         await tx.movimentacaoEstoque.create({
           data: {
-            negocioId,
+            negocioId: ei.negocioId,
             estoqueItemId: ei.id,
             usuarioId: usuarioId ?? null,
             tipo: TipoMovimentacao.SAIDA_VENDA,
@@ -209,6 +240,9 @@ export class PdvService {
 
       return p;
     });
+
+    // Invalida cache da vitrine após a venda (estoque pode ter zerado)
+    await this.redis.del(`catalog:v2:${negocioId}:products`).catch(() => {});
 
     // Fire-and-forget: impressão e NF-e (fora da transação)
     this.imprimirService.imprimirComanda(negocioId, pedido.id).catch((err) => {

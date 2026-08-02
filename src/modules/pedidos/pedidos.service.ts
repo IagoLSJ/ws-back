@@ -7,6 +7,7 @@ import { ImprimirService } from '../imprimir/imprimir.service';
 import { CaixaService } from '../caixa/caixa.service';
 import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao, TipoEntrega } from '@prisma/client';
 import { calcularPrecoFinal } from '../../common/utils/preco';
+import { converterPeso } from '../../common/utils/unidade';
 
 const TRANSICOES_VALIDAS: Record<StatusPedido, StatusPedido[]> = {
   [StatusPedido.PENDENTE]: [StatusPedido.CONFIRMADO, StatusPedido.CANCELADO],
@@ -71,7 +72,7 @@ export class PedidosService {
         where: { negocioId, produtoId: item.produtoId },
         include: { produto: { select: { controlaEstoque: true, vendaPorPeso: true } } },
       });
-      if (!estoqueItem || !estoqueItem.produto?.controlaEstoque || estoqueItem.produto.vendaPorPeso) continue;
+      if (!estoqueItem || !estoqueItem.produto?.controlaEstoque) continue;
 
       const jaBaixado = await tx.movimentacaoEstoque.findFirst({
         where: {
@@ -82,7 +83,9 @@ export class PedidosService {
       });
       if (jaBaixado) continue;
 
-      const qtd = Number(item.quantidade);
+      const qtd = estoqueItem.produto.vendaPorPeso
+        ? converterPeso(Number(item.quantidade), 'kg', estoqueItem.unidade)
+        : Number(item.quantidade);
       const qtdAntes = Number(estoqueItem.quantidadeAtual);
       await tx.estoqueItem.update({
         where: { id: estoqueItem.id },
@@ -102,6 +105,7 @@ export class PedidosService {
         },
       });
     }
+    await this.redis.del(`catalog:v2:${negocioId}:products`).catch(() => {});
   }
 
   private async estornarEstoque(negocioId: string, pedido: any, usuarioId?: string) {
@@ -117,11 +121,22 @@ export class PedidosService {
           tipo: TipoMovimentacao.SAIDA_VENDA,
           referencia: pedido.id,
         },
-        include: { estoqueItem: { select: { id: true, quantidadeAtual: true } } },
+        include: {
+          estoqueItem: {
+            select: {
+              id: true,
+              quantidadeAtual: true,
+              unidade: true,
+              produto: { select: { vendaPorPeso: true } },
+            },
+          },
+        },
       });
       if (!mov) continue;
 
-      const qtd = Number(item.quantidade);
+      const qtd = mov.estoqueItem.produto?.vendaPorPeso
+        ? converterPeso(Number(item.quantidade), 'kg', mov.estoqueItem.unidade)
+        : Number(item.quantidade);
       const qtdAntes = Number(mov.estoqueItem.quantidadeAtual);
       await tx.estoqueItem.update({
         where: { id: mov.estoqueItemId },
@@ -141,6 +156,7 @@ export class PedidosService {
         },
       });
     }
+    await this.redis.del(`catalog:v2:${negocioId}:products`).catch(() => {});
   }
 
   async checkout(slug: string, sessionId: string, dto: CheckoutDto, usuarioId?: string) {
@@ -226,11 +242,14 @@ export class PedidosService {
     }
 
     for (const item of carrinho.itens) {
-      if (!item.produto.controlaEstoque || item.produto.vendaPorPeso) continue;
+      if (!item.produto.controlaEstoque) continue;
       const estoqueItem = await this.prisma.estoqueItem.findFirst({
         where: { negocioId, produtoId: item.produto.id },
       });
-      if (!estoqueItem || estoqueItem.quantidadeAtual < Number(item.quantidade)) {
+      const qtd = item.produto.vendaPorPeso
+        ? converterPeso(Number(item.quantidade), 'kg', estoqueItem?.unidade)
+        : Number(item.quantidade);
+      if (!estoqueItem || Number(estoqueItem.quantidadeAtual) < qtd) {
         throw new BadRequestException(`Estoque insuficiente para "${item.produto.nome}"`);
       }
     }
@@ -499,12 +518,14 @@ export class PedidosService {
           negocioId: pedido.negocioId,
           produtoId: { in: pedido.itens.map((i) => i.produtoId) },
         },
-        include: { produto: { select: { controlaEstoque: true, vendaPorPeso: true } } },
+        include: {
+          produto: { select: { controlaEstoque: true, vendaPorPeso: true } },
+        },
       });
 
       for (const item of pedido.itens) {
         const estoqueItem = estoqueItens.find((e) => e.produtoId === item.produtoId);
-        if (!estoqueItem || !estoqueItem.produto?.controlaEstoque || estoqueItem.produto.vendaPorPeso) continue;
+        if (!estoqueItem || !estoqueItem.produto?.controlaEstoque) continue;
 
         const jaBaixado = await tx.movimentacaoEstoque.findFirst({
           where: {
@@ -515,9 +536,14 @@ export class PedidosService {
         });
         if (jaBaixado) continue;
 
+        const qtd = estoqueItem.produto.vendaPorPeso
+          ? converterPeso(Number(item.quantidade), 'kg', estoqueItem.unidade)
+          : Number(item.quantidade);
+        const qtdAntes = Number(estoqueItem.quantidadeAtual);
+
         await tx.estoqueItem.update({
           where: { id: estoqueItem.id },
-          data: { quantidadeAtual: { decrement: Number(item.quantidade) } },
+          data: { quantidadeAtual: { decrement: qtd } },
         });
 
         await tx.movimentacaoEstoque.create({
@@ -526,9 +552,9 @@ export class PedidosService {
             estoqueItemId: estoqueItem.id,
             usuarioId,
             tipo: TipoMovimentacao.SAIDA_VENDA,
-            quantidade: Number(item.quantidade),
-            quantidadeAntes: estoqueItem.quantidadeAtual,
-            quantidadeApos: estoqueItem.quantidadeAtual - Number(item.quantidade),
+            quantidade: qtd,
+            quantidadeAntes: qtdAntes,
+            quantidadeApos: qtdAntes - qtd,
             motivo: `Confirmação pagamento #${pedido.id.slice(0, 8)}`,
             referencia: pedido.id,
           },
@@ -543,6 +569,8 @@ export class PedidosService {
       pagamentoPendente.metodo,
       usuarioId,
     );
+
+    await this.redis.del(`catalog:v2:${pedido.negocioId}:products`).catch(() => {});
 
     return this.prisma.pedido.findUnique({
       where: { id },

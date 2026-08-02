@@ -1,4 +1,4 @@
-import { IsString, IsInt, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsString, IsOptional, IsNumber, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CriarEstoqueItemDto {
@@ -24,13 +24,13 @@ export class CriarEstoqueItemDto {
   precoCusto?: number;
 
   @ApiProperty({ example: 0 })
-  @IsInt()
+  @IsNumber()
   @Min(0)
   quantidadeAtual!: number;
 
   @ApiPropertyOptional({ example: 5 })
   @IsOptional()
-  @IsInt()
+  @IsNumber()
   @Min(0)
   estoqueMinimo?: number;
 

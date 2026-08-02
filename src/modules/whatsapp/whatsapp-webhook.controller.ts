@@ -2,7 +2,9 @@ import { Controller, Get, Post, Query, Body, Res, HttpStatus, Logger } from '@ne
 import { Response } from 'express';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { RedisService } from '../../infra/cache/redis.service';
 import { MetaWhatsappService } from './meta-whatsapp.service';
+import { GeminiService } from './gemini.service';
 import { ChatbotService } from './chatbot.service';
 
 @ApiExcludeController()
@@ -12,7 +14,9 @@ export class WhatsappWebhookController {
 
   constructor(
     private prisma: PrismaService,
+    private redis: RedisService,
     private meta: MetaWhatsappService,
+    private gemini: GeminiService,
     private chatbot: ChatbotService,
   ) {}
 
@@ -27,6 +31,16 @@ export class WhatsappWebhookController {
     }
     this.logger.warn(`[WEBHOOK] Falha na verificacao: mode=${mode}, token=${token}`);
     return res.status(HttpStatus.FORBIDDEN).send('Verification failed');
+  }
+
+  private async enviarResposta(telefone: string, resposta: { texto: string; imagens?: string[] }) {
+    const envioTexto = await this.meta.sendText(telefone, resposta.texto);
+    this.logger.log(`[WEBHOOK] resultado envio texto Meta: ${JSON.stringify(envioTexto)}`);
+
+    for (const url of resposta.imagens || []) {
+      const envioImg = await this.meta.sendImage(telefone, url);
+      this.logger.log(`[WEBHOOK] resultado envio imagem Meta (${url}): ${JSON.stringify(envioImg)}`);
+    }
   }
 
   @Post()
@@ -65,6 +79,12 @@ export class WhatsappWebhookController {
       const slug = config.negocio.slug;
       this.logger.log(`[WEBHOOK] roteado para negocio ${slug} (${negocioId})`);
 
+      const jaProcessada = await this.redis.set(`chatbot:dedupe:${messageId}`, '1', 86400, true);
+      if (!jaProcessada) {
+        this.logger.warn(`[WEBHOOK] mensagem ${messageId} ja processada - ignorando (dedupe)`);
+        return res.status(HttpStatus.OK).send('OK');
+      }
+
       await this.meta.markAsRead(messageId);
 
       if (message.type === 'text') {
@@ -74,8 +94,30 @@ export class WhatsappWebhookController {
 
         const resposta = await this.chatbot.processar(negocioId, slug, telefone, nome, texto);
         this.logger.log(`[WEBHOOK] enviando resposta via Meta para ${telefone}`);
-        const envio = await this.meta.sendText(telefone, resposta.texto);
-        this.logger.log(`[WEBHOOK] resultado envio Meta: ${JSON.stringify(envio)}`);
+        await this.enviarResposta(telefone, resposta);
+      } else if (message.type === 'audio') {
+        const mediaId = message.audio?.id as string | undefined;
+        const nome = value.contacts?.[0]?.profile?.name;
+        if (!mediaId) {
+          this.logger.warn('[WEBHOOK] audio sem media id');
+        } else {
+          this.logger.log(`[WEBHOOK] processando audio mediaId=${mediaId}`);
+          try {
+            const media = await this.meta.getMedia(mediaId);
+            const transcricao = await this.gemini.transcribeAudio(media.buffer, media.mimeType);
+            if (!transcricao) {
+              this.logger.warn('[WEBHOOK] transcricao vazia');
+              await this.enviarResposta(telefone, { texto: 'Não consegui entender o áudio 😕 Pode mandar em texto?' });
+            } else {
+              this.logger.log(`[WEBHOOK] transcricao: "${transcricao}"`);
+              const resposta = await this.chatbot.processar(negocioId, slug, telefone, nome, transcricao);
+              await this.enviarResposta(telefone, resposta);
+            }
+          } catch (err: any) {
+            this.logger.error(`[WEBHOOK] erro ao processar audio: ${err.message}`);
+            await this.enviarResposta(telefone, { texto: 'Não consegui processar o áudio agora 😕 Pode mandar em texto?' });
+          }
+        }
       } else if (message.type === 'interactive') {
         const reply = message.interactive?.button_reply || message.interactive?.list_reply;
         if (reply) {
@@ -85,8 +127,7 @@ export class WhatsappWebhookController {
 
           const resposta = await this.chatbot.processar(negocioId, slug, telefone, nome, texto);
           this.logger.log(`[WEBHOOK] enviando resposta (interativo) via Meta para ${telefone}`);
-          const envio = await this.meta.sendText(telefone, resposta.texto);
-          this.logger.log(`[WEBHOOK] resultado envio Meta: ${JSON.stringify(envio)}`);
+          await this.enviarResposta(telefone, resposta);
         }
       } else {
         this.logger.warn(`[WEBHOOK] tipo de mensagem nao tratado: ${message.type}`);

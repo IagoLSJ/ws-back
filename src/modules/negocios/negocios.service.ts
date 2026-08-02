@@ -168,6 +168,48 @@ export class NegociosService {
     await this.prisma.negocio.update({ where: { id }, data: { logoUrl: undefined } });
   }
 
+  async requestCardapioImagemUploadUrl(id: string, fileName: string) {
+    await this.findOne(id);
+
+    const ext = fileName.split('.').pop();
+    const key = `cardapios/${id}/${uuidv4()}.${ext}`;
+    const url = await this.storage.getPresignedUploadUrl(key);
+
+    return { url, key };
+  }
+
+  async confirmCardapioImagemUpload(id: string, key: string) {
+    await this.findOne(id);
+
+    const publicUrl = this.storage.getPublicUrl(key);
+    const atual = await this.prisma.configuracaoNegocio.findUnique({ where: { negocioId: id } });
+    const imagens = Array.isArray(atual?.cardapioImagens) ? (atual.cardapioImagens as string[]) : [];
+
+    return this.prisma.configuracaoNegocio.upsert({
+      where: { negocioId: id },
+      create: { negocioId: id, cardapioImagens: [publicUrl] },
+      update: { cardapioImagens: [...imagens, publicUrl] },
+    });
+  }
+
+  async deleteCardapioImagem(id: string, index: number) {
+    const config = await this.prisma.configuracaoNegocio.findUnique({ where: { negocioId: id } });
+    if (!config?.cardapioImagens) return;
+
+    const imagens = config.cardapioImagens as string[];
+    if (index < 0 || index >= imagens.length) return;
+
+    const removida = imagens[index];
+    const key = this.storage.extractKey(removida);
+    if (key) this.storage.deleteObject(key).catch(() => {});
+
+    const restantes = imagens.filter((_, i) => i !== index);
+    await this.prisma.configuracaoNegocio.update({
+      where: { negocioId: id },
+      data: { cardapioImagens: restantes.length ? restantes : undefined },
+    });
+  }
+
   async listarTaxasFreteBairro(negocioId: string) {
     return this.prisma.taxaFreteBairro.findMany({
       where: { negocioId },

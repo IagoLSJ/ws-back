@@ -25,8 +25,10 @@ export default () => ({
     phoneNumberId: process.env.META_WHATSAPP_PHONE_NUMBER_ID || '',
     verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || '',
     apiVersion: process.env.META_API_VERSION || 'v22.0',
+    baseUrl: process.env.META_API_BASE_URL || 'https://graph.facebook.com',
   },
-  groq: {
-    apiKey: process.env.GROQ_API_KEY || '',
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY || '',
+    model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
   },
 });

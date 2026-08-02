@@ -75,6 +75,27 @@ export class NegociosController {
     return this.service.deleteLogo(id);
   }
 
+  @Post(':id/cardapio-imagens')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Solicitar URL de upload de uma foto do cardápio' })
+  requestCardapioImagemUpload(@Param('id') id: string, @Body('fileName') fileName: string) {
+    return this.service.requestCardapioImagemUploadUrl(id, fileName);
+  }
+
+  @Post(':id/cardapio-imagens/confirmar')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Confirmar upload de uma foto do cardápio' })
+  confirmCardapioImagemUpload(@Param('id') id: string, @Body('key') key: string) {
+    return this.service.confirmCardapioImagemUpload(id, key);
+  }
+
+  @Delete(':id/cardapio-imagens/:index')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Remover uma foto do cardápio' })
+  deleteCardapioImagem(@Param('id') id: string, @Param('index') index: string) {
+    return this.service.deleteCardapioImagem(id, parseInt(index, 10));
+  }
+
   @Patch(':id/configuracoes')
   @Roles(RoleNegocio.GERENTE)
   @ApiOperation({ summary: 'Atualizar configurações do negócio' })

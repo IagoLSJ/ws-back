@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { RedisService } from '../../infra/cache/redis.service';
 import { ProdutoStatus, TipoMovimentacao } from '@prisma/client';
 import { CriarEstoqueItemDto } from './dto/criar-estoque-item.dto';
 import { AtualizarEstoqueItemDto } from './dto/atualizar-estoque-item.dto';
@@ -13,7 +14,12 @@ export class EstoqueService {
   constructor(
     private prisma: PrismaService,
     @InjectQueue('alertas-estoque') private alertasQueue: Queue,
+    private redis: RedisService,
   ) {}
+
+  private async invalidateCatalogo(negocioId: string) {
+    await this.redis.del(`catalog:v2:${negocioId}:products`);
+  }
 
   private include = {
     produto: {
@@ -28,6 +34,8 @@ export class EstoqueService {
       sku: item.produto?.sku ?? item.sku ?? null,
       ehAvulso: !item.produtoId,
       precoCusto: item.precoCusto ? Number(item.precoCusto) : null,
+      quantidadeAtual: Number(item.quantidadeAtual),
+      estoqueMinimo: Number(item.estoqueMinimo),
     };
   }
 
@@ -118,6 +126,7 @@ export class EstoqueService {
       data: dto,
       include: this.include,
     });
+    await this.invalidateCatalogo(negocioId);
     return this.mapItem(item);
   }
 
@@ -128,6 +137,8 @@ export class EstoqueService {
       await tx.movimentacaoEstoque.deleteMany({ where: { estoqueItemId: itemId } });
       await tx.estoqueItem.delete({ where: { id: itemId } });
     });
+
+    await this.invalidateCatalogo(negocioId);
 
     return { message: 'Item removido' };
   }
@@ -144,18 +155,23 @@ export class EstoqueService {
     const isEntrada = tiposEntrada.includes(dto.tipo);
     const isInventario = dto.tipo === 'INVENTARIO';
 
-    if (!isEntrada && !isInventario && dto.quantidade > item.quantidadeAtual) {
+    const quantidadeAntes = Number(item.quantidadeAtual);
+
+    if (!isInventario && dto.quantidade <= 0) {
+      throw new BadRequestException('Quantidade deve ser maior que zero');
+    }
+
+    if (!isEntrada && !isInventario && dto.quantidade > quantidadeAntes) {
       throw new BadRequestException('Estoque insuficiente');
     }
 
-    const quantidadeAntes = item.quantidadeAtual;
     const quantidadeApos = isInventario
       ? dto.quantidade
       : isEntrada
-        ? quantidadeAntes + dto.quantidade
-        : quantidadeAntes - dto.quantidade;
+        ? Math.round((quantidadeAntes + dto.quantidade) * 1000) / 1000
+        : Math.round((quantidadeAntes - dto.quantidade) * 1000) / 1000;
 
-    const delta = Math.abs(quantidadeApos - quantidadeAntes);
+    const delta = Math.round(Math.abs(quantidadeApos - quantidadeAntes) * 1000) / 1000;
 
     const [movimentacao] = await this.prisma.$transaction([
       this.prisma.movimentacaoEstoque.create({
@@ -186,28 +202,36 @@ export class EstoqueService {
       });
     }
 
-    if (!isEntrada && quantidadeApos <= item.estoqueMinimo) {
+    if (!isEntrada && quantidadeApos <= Number(item.estoqueMinimo)) {
       await this.alertasQueue.add('estoque-ruptura', {
         negocioId,
         produtoId: item.produtoId,
         produtoNome: item.nome,
         quantidadeAtual: quantidadeApos,
-        estoqueMinimo: item.estoqueMinimo,
+        estoqueMinimo: Number(item.estoqueMinimo),
       });
     }
+
+    await this.invalidateCatalogo(negocioId);
 
     return movimentacao;
   }
 
   async historico(negocioId: string, itemId: string) {
     await this.findOne(negocioId, itemId);
-    return this.prisma.movimentacaoEstoque.findMany({
+    const movimentacoes = await this.prisma.movimentacaoEstoque.findMany({
       where: { estoqueItemId: itemId, negocioId },
       orderBy: { criadoEm: 'desc' },
       include: {
         usuario: { select: { id: true, nome: true, email: true } },
       },
     });
+    return movimentacoes.map((m) => ({
+      ...m,
+      quantidade: Number(m.quantidade),
+      quantidadeAntes: Number(m.quantidadeAntes),
+      quantidadeApos: Number(m.quantidadeApos),
+    }));
   }
 
   async transferir(negocioId: string, dto: TransferirEstoqueDto, usuarioId?: string) {
@@ -217,7 +241,7 @@ export class EstoqueService {
 
     const itemOrigem = await this.findOne(negocioId, dto.itemOrigemId);
 
-    if (dto.quantidade > itemOrigem.quantidadeAtual) {
+    if (dto.quantidade > Number(itemOrigem.quantidadeAtual)) {
       throw new BadRequestException('Estoque insuficiente para transferência');
     }
 
@@ -256,10 +280,10 @@ export class EstoqueService {
       throw new BadRequestException('Origem e destino devem ser diferentes');
     }
 
-    const quantidadeAntesOrigem = itemOrigem.quantidadeAtual;
-    const quantidadeAntesDestino = itemDestino.quantidadeAtual;
+    const quantidadeAntesOrigem = Number(itemOrigem.quantidadeAtual);
+    const quantidadeAntesDestino = Number(itemDestino.quantidadeAtual);
 
-    const novaQtdOrigem = quantidadeAntesOrigem - dto.quantidade;
+    const novaQtdOrigem = Math.round((quantidadeAntesOrigem - dto.quantidade) * 1000) / 1000;
 
     await this.prisma.$transaction([
       this.prisma.estoqueItem.update({
@@ -303,15 +327,18 @@ export class EstoqueService {
       });
     }
 
-    if (novaQtdOrigem <= itemOrigem.estoqueMinimo) {
+    if (novaQtdOrigem <= Number(itemOrigem.estoqueMinimo)) {
       await this.alertasQueue.add('estoque-ruptura', {
         negocioId,
         produtoId: itemOrigem.produtoId,
         produtoNome: itemOrigem.nome,
         quantidadeAtual: novaQtdOrigem,
-        estoqueMinimo: itemOrigem.estoqueMinimo,
+        estoqueMinimo: Number(itemOrigem.estoqueMinimo),
       });
     }
+
+    await this.invalidateCatalogo(negocioId);
+    await this.invalidateCatalogo(dto.negocioDestinoId);
 
     return { message: 'Transferência realizada com sucesso' };
   }
@@ -322,5 +349,41 @@ export class EstoqueService {
       include: this.include,
     });
     return items.map(this.mapItem);
+  }
+
+  async zerarNegativos(negocioId: string, usuarioId?: string) {
+    const itens = await this.prisma.estoqueItem.findMany({
+      where: { negocioId, quantidadeAtual: { lt: 0 } },
+    });
+
+    let corrigidos = 0;
+    for (const item of itens) {
+      const qtdAtual = Number(item.quantidadeAtual);
+      await this.prisma.$transaction(async (tx) => {
+        await tx.estoqueItem.update({
+          where: { id: item.id },
+          data: { quantidadeAtual: 0 },
+        });
+        await tx.movimentacaoEstoque.create({
+          data: {
+            negocioId,
+            estoqueItemId: item.id,
+            usuarioId: usuarioId ?? null,
+            tipo: TipoMovimentacao.INVENTARIO,
+            quantidade: Math.abs(qtdAtual),
+            quantidadeAntes: qtdAtual,
+            quantidadeApos: 0,
+            motivo: 'Correção: estoque negativo zerado',
+          },
+        });
+      });
+      corrigidos++;
+    }
+
+    if (corrigidos > 0) {
+      await this.invalidateCatalogo(negocioId);
+    }
+
+    return { corrigidos };
   }
 }

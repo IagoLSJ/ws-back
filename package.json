@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "mock:meta": "node scripts/meta-mock.mjs",
+    "mock:chat": "node scripts/mock-chat.mjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:push": "prisma db push",
