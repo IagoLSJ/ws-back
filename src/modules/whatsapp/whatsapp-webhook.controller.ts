@@ -6,6 +6,7 @@ import { RedisService } from '../../infra/cache/redis.service';
 import { MetaWhatsappService } from './meta-whatsapp.service';
 import { GeminiService } from './gemini.service';
 import { ChatbotService } from './chatbot.service';
+import { TtsService } from './tts.service';
 
 @ApiExcludeController()
 @Controller('whatsapp/webhook')
@@ -18,6 +19,7 @@ export class WhatsappWebhookController {
     private meta: MetaWhatsappService,
     private gemini: GeminiService,
     private chatbot: ChatbotService,
+    private tts: TtsService,
   ) {}
 
   @Get()
@@ -41,6 +43,43 @@ export class WhatsappWebhookController {
       const envioImg = await this.meta.sendImage(telefone, url);
       this.logger.log(`[WEBHOOK] resultado envio imagem Meta (${url}): ${JSON.stringify(envioImg)}`);
     }
+  }
+
+  private limparTextoParaAudio(texto: string): string {
+    return texto
+      .replace(/[*_`#>|]/g, ' ')
+      .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}\u{FE0F}]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // Cliente que manda áudio provavelmente não sabe ler: responde em áudio
+  private async enviarRespostaAudio(telefone: string, resposta: { texto: string; imagens?: string[] }) {
+    try {
+      const textoLimpo = this.limparTextoParaAudio(resposta.texto);
+      const audio = textoLimpo
+        ? (await this.tts.synthesize(textoLimpo)) ?? (await this.gemini.textToSpeech(textoLimpo))
+        : null;
+
+      if (audio) {
+        const mediaId = await this.meta.uploadMedia(audio.buffer, audio.mimeType);
+        if (mediaId) {
+          const envio = await this.meta.sendAudio(telefone, mediaId);
+          if (envio.success) {
+            this.logger.log(`[WEBHOOK] resposta em audio enviada para ${telefone}`);
+            for (const url of resposta.imagens || []) {
+              await this.meta.sendImage(telefone, url).catch(() => {});
+            }
+            return;
+          }
+          this.logger.warn(`[WEBHOOK] falha ao enviar audio: ${envio.error}`);
+        }
+      }
+      this.logger.warn('[WEBHOOK] TTS/upload indisponivel - respondendo em texto');
+    } catch (err: any) {
+      this.logger.error(`[WEBHOOK] erro ao responder em audio: ${err.message}`);
+    }
+    await this.enviarResposta(telefone, resposta);
   }
 
   @Post()
@@ -111,7 +150,7 @@ export class WhatsappWebhookController {
             } else {
               this.logger.log(`[WEBHOOK] transcricao: "${transcricao}"`);
               const resposta = await this.chatbot.processar(negocioId, slug, telefone, nome, transcricao);
-              await this.enviarResposta(telefone, resposta);
+              await this.enviarRespostaAudio(telefone, resposta);
             }
           } catch (err: any) {
             this.logger.error(`[WEBHOOK] erro ao processar audio: ${err.message}`);

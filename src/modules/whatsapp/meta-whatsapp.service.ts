@@ -99,6 +99,81 @@ export class MetaWhatsappService {
     }
   }
 
+  async uploadMedia(buffer: Buffer, mimeType: string): Promise<string | null> {
+    if (!this.token || !this.phoneNumberId) return null;
+
+    const extensao = mimeType.includes('mpeg')
+      ? 'mp3'
+      : mimeType.includes('wav')
+        ? 'wav'
+        : mimeType.includes('mp4') || mimeType.includes('aac')
+          ? 'm4a'
+          : 'ogg';
+    const nomeArquivo = `audio-${Date.now()}.${extensao}`;
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+    form.append('file', new Blob([new Uint8Array(buffer)], { type: mimeType }), nomeArquivo);
+
+    try {
+      const res = await fetch(`${this.baseUrl}/${this.phoneNumberId}/media`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.token}` },
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        this.logger.error(`[META] uploadMedia error: ${JSON.stringify(data)}`);
+        return null;
+      }
+      this.logger.log(`[META] media enviada, id=${data.id}`);
+      return data.id || null;
+    } catch (err: any) {
+      this.logger.error(`[META] uploadMedia rede: ${err.message}`);
+      return null;
+    }
+  }
+
+  async sendAudio(
+    to: string,
+    mediaId: string,
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    this.logger.log(`[META] sendAudio para ${to} | mediaId=${mediaId}`);
+    if (!this.token || !this.phoneNumberId) {
+      return { success: false, error: 'Meta WhatsApp nao configurado' };
+    }
+
+    try {
+      const res = await fetch(`${this.baseUrl}/${this.phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to,
+          type: 'audio',
+          audio: { id: mediaId },
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        this.logger.error(`[META] erro ao enviar audio: ${JSON.stringify(data)}`);
+        return { success: false, error: data.error?.message || 'Erro desconhecido' };
+      }
+
+      const messageId = data.messages?.[0]?.id;
+      this.logger.log(`[META] audio enviado com sucesso, id=${messageId}`);
+      return { success: true, messageId };
+    } catch (err: any) {
+      this.logger.error(`[META] erro de rede ao enviar audio: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
+
   async sendImage(
     to: string,
     link: string,

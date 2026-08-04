@@ -151,6 +151,56 @@ export class GeminiService {
     };
   }
 
+  async textToSpeech(texto: string): Promise<{ buffer: Buffer; mimeType: string } | null> {
+    if (!this.apiKey || !texto.trim()) return null;
+
+    const model = 'gemini-2.5-flash-preview-tts';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+    try {
+      this.logger.log(`[GEMINI] TTS solicitado para ${texto.length} caracteres`);
+      const inicio = Date.now();
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: texto }] }],
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            voiceName: 'Kore',
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        this.logger.error(`[GEMINI] TTS error (${res.status}): ${text.slice(0, 300)}`);
+        return null;
+      }
+
+      const data = await res.json();
+      const parts: Array<{ inlineData?: { data?: string; mimeType?: string } }> =
+        data.candidates?.[0]?.content?.parts || [];
+      const audioPart = parts.find((p) => p.inlineData?.data);
+      if (!audioPart?.inlineData?.data) {
+        this.logger.warn(`[GEMINI] TTS sem audio na resposta`);
+        return null;
+      }
+
+      this.logger.log(`[GEMINI] TTS concluido em ${Date.now() - inicio}ms`);
+      return {
+        buffer: Buffer.from(audioPart.inlineData.data, 'base64'),
+        mimeType: audioPart.inlineData.mimeType || 'audio/ogg',
+      };
+    } catch (err: any) {
+      this.logger.error(`[GEMINI] TTS erro: ${err.message}`);
+      return null;
+    }
+  }
+
   async transcribeAudio(buffer: Buffer, mimeType?: string): Promise<string> {
     const model = this.defaultModel;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;

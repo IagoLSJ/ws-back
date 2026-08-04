@@ -15,4 +15,9 @@ export class MovimentoCaixaDto {
   @IsOptional()
   @IsString()
   descricao?: string;
+
+  @ApiPropertyOptional({ description: 'Caixa alvo (gerente+). Omita para usar o próprio caixa.' })
+  @IsOptional()
+  @IsString()
+  caixaId?: string;
 }

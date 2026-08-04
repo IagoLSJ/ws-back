@@ -4,6 +4,7 @@ import { RedisService } from '../../infra/cache/redis.service';
 import { StorageService } from '../../infra/storage/storage.service';
 import { CriarProdutoDto } from './dto/criar-produto.dto';
 import { AtualizarProdutoDto } from './dto/atualizar-produto.dto';
+import { AjusteMassaProdutoDto, CampoAjusteMassa, OperacaoAjusteMassa, TipoAjusteMassa } from './dto/ajuste-massa-produto.dto';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
@@ -517,5 +518,117 @@ export class ProdutosService {
     const [hFim, mFim] = (hoje.fechamento || '23:59').split(':').map(Number);
 
     return minutosAtual >= (hInicio * 60 + mInicio) && minutosAtual <= (hFim * 60 + mFim);
+  }
+
+  async ajustarPrecosEmMassa(negocioId: string, dto: AjusteMassaProdutoDto) {
+    const { busca, categoriaId, ids, tipo, operacao, valor, aplicarEm } = dto;
+
+    const where: any = { negocioId };
+    if (ids?.length) {
+      where.id = { in: ids };
+    } else {
+      const or: any[] = [];
+      if (busca?.trim()) {
+        const termo = busca.trim();
+        or.push({ nome: { contains: termo, mode: 'insensitive' } });
+        or.push({ sku: { contains: termo, mode: 'insensitive' } });
+      }
+      if (categoriaId) {
+        where.categoriaId = categoriaId;
+      }
+      if (or.length) where.OR = or;
+    }
+
+    const produtos = await this.prisma.produto.findMany({
+      where,
+      select: { id: true, nome: true, preco: true, precoCusto: true },
+    });
+
+    if (!produtos.length) {
+      throw new BadRequestException('Nenhum produto encontrado para o ajuste');
+    }
+
+    const aplicarPreco = aplicarEm === CampoAjusteMassa.PRECO || aplicarEm === CampoAjusteMassa.AMBOS;
+    const aplicarCusto = aplicarEm === CampoAjusteMassa.CUSTO || aplicarEm === CampoAjusteMassa.AMBOS;
+
+    const resumo: any[] = [];
+    const updates: Promise<any>[] = [];
+
+    for (const p of produtos) {
+      const novoPreco = aplicarPreco ? this.calcularAjuste(Number(p.preco), tipo, operacao, valor) : Number(p.preco);
+      const novoCusto = aplicarCusto && p.precoCusto != null
+        ? this.calcularAjuste(Number(p.precoCusto), tipo, operacao, valor)
+        : p.precoCusto;
+
+      if (aplicarPreco && aplicarCusto && novoPreco === Number(p.preco) && novoCusto === Number(p.precoCusto)) {
+        continue;
+      }
+      if (aplicarPreco && !aplicarCusto && novoPreco === Number(p.preco)) {
+        continue;
+      }
+      if (aplicarCusto && !aplicarPreco && (p.precoCusto == null || novoCusto === Number(p.precoCusto))) {
+        continue;
+      }
+
+      const data: any = {};
+      if (aplicarPreco) data.preco = novoPreco;
+      if (aplicarCusto) data.precoCusto = novoCusto;
+
+      updates.push(
+        this.prisma.produto.update({
+          where: { id: p.id },
+          data,
+        }).then(() => {
+          if (aplicarCusto) {
+            return this.prisma.estoqueItem.updateMany({
+              where: { produtoId: p.id },
+              data: { precoCusto: novoCusto },
+            });
+          }
+        }),
+      );
+
+      resumo.push({
+        id: p.id,
+        nome: p.nome,
+        precoAntes: Number(p.preco),
+        precoNovo: aplicarPreco ? novoPreco : undefined,
+        custoAntes: p.precoCusto != null ? Number(p.precoCusto) : undefined,
+        custoNovo: aplicarCusto && p.precoCusto != null ? novoCusto : undefined,
+      });
+    }
+
+    await Promise.all(updates);
+
+    if (resumo.length) {
+      await this.invalidateCache(negocioId);
+    }
+
+    return {
+      atualizados: resumo.length,
+      totalEncontrados: produtos.length,
+      resumo: resumo.slice(0, 100),
+    };
+  }
+
+  private calcularAjuste(
+    valorBase: number,
+    tipo: TipoAjusteMassa,
+    operacao: OperacaoAjusteMassa,
+    valor: number,
+  ): number {
+    if (!valor) return valorBase;
+    let novo = valorBase;
+    if (tipo === TipoAjusteMassa.PERCENTUAL) {
+      const fator = valor / 100;
+      novo = operacao === OperacaoAjusteMassa.SUBTRAIR
+        ? valorBase * (1 - fator)
+        : valorBase * (1 + fator);
+    } else {
+      novo = operacao === OperacaoAjusteMassa.SUBTRAIR
+        ? valorBase - valor
+        : valorBase + valor;
+    }
+    return Math.round(Math.max(0, novo) * 100) / 100;
   }
 }

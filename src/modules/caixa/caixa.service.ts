@@ -86,22 +86,45 @@ export class CaixaService {
       include: {
         usuarioAbertura: { select: { id: true, nome: true, email: true } },
         operador: { select: { id: true, nome: true, email: true } },
-        movimentos: { orderBy: { criadoEm: 'desc' }, take: 50 },
       },
     });
-    return caixa;
+    if (!caixa) return null;
+
+    const movimentos = await this.prisma.caixaMovimento.findMany({
+      where: { caixaId: caixa.id },
+      orderBy: { criadoEm: 'desc' },
+    });
+
+    const totais = await this.calcularTotais(movimentos);
+
+    return { ...caixa, ...totais, movimentos: movimentos.slice(0, 50) };
   }
 
   async listarAbertos(negocioId: string) {
-    return this.prisma.caixa.findMany({
+    const caixas = await this.prisma.caixa.findMany({
       where: { negocioId, status: 'ABERTO' },
       orderBy: { dataAbertura: 'desc' },
       include: {
         usuarioAbertura: { select: { id: true, nome: true } },
         operador: { select: { id: true, nome: true } },
-        movimentos: { orderBy: { criadoEm: 'desc' }, take: 5 },
       },
     });
+    if (!caixas.length) return caixas;
+
+    const movimentos = await this.prisma.caixaMovimento.findMany({
+      where: { caixaId: { in: caixas.map((c) => c.id) } },
+    });
+
+    return Promise.all(
+      caixas.map(async (c) => {
+        const movs = movimentos.filter((m) => m.caixaId === c.id);
+        const totais = await this.calcularTotais(movs);
+        const recentes = [...movs]
+          .sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime())
+          .slice(0, 5);
+        return { ...c, ...totais, movimentos: recentes };
+      }),
+    );
   }
 
   async listar(negocioId: string) {
@@ -146,50 +169,17 @@ export class CaixaService {
         where: { caixaId: caixa.id },
       });
 
-      const totalVendas = movimentos
-        .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO)
-        .reduce((s, m) => s + Number(m.valor), 0);
-
-      const totalDinheiro = movimentos
-        .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.formaPagamento === 'DINHEIRO')
-        .reduce((s, m) => s + Number(m.valor), 0);
-
-      const totalDebito = movimentos
-        .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.formaPagamento === 'CARTAO_DEBITO')
-        .reduce((s, m) => s + Number(m.valor), 0);
-
-      const totalCredito = movimentos
-        .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.formaPagamento === 'CARTAO_CREDITO')
-        .reduce((s, m) => s + Number(m.valor), 0);
-
-      const totalPix = movimentos
-        .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.formaPagamento === 'PIX')
-        .reduce((s, m) => s + Number(m.valor), 0);
-
-      const totalOutros = movimentos
-        .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && !['DINHEIRO', 'CARTAO_DEBITO', 'CARTAO_CREDITO', 'PIX'].includes(m.formaPagamento ?? ''))
-        .reduce((s, m) => s + Number(m.valor), 0);
-
-      const totalSangrias = movimentos
-        .filter((m) => m.tipo === TipoMovimentoCaixa.SANGRIA)
-        .reduce((s, m) => s + Number(m.valor), 0);
-
-      const totalSuprimentos = movimentos
-        .filter((m) => m.tipo === TipoMovimentoCaixa.SUPRIMENTO)
-        .reduce((s, m) => s + Number(m.valor), 0);
-
-      const pedidoIdsComPagamento = movimentos
-        .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.pedidoId)
-        .map((m) => m.pedidoId!);
-
-      const pedidosComTroco = pedidoIdsComPagamento.length
-        ? await tx.pedido.findMany({
-            where: { id: { in: pedidoIdsComPagamento } },
-            select: { troco: true },
-          })
-        : [];
-
-      const totalTroco = pedidosComTroco.reduce((s, p) => s + Number(p.troco ?? 0), 0);
+      const {
+        totalVendas,
+        totalDinheiro,
+        totalDebito,
+        totalCredito,
+        totalPix,
+        totalOutros,
+        totalSangrias,
+        totalSuprimentos,
+        totalTroco,
+      } = await this.calcularTotais(movimentos);
 
       const atualizado = await tx.caixa.update({
         where: { id: caixa.id },
@@ -226,10 +216,58 @@ export class CaixaService {
 
   async movimento(negocioId: string, dto: MovimentoCaixaDto, usuarioId: string) {
     return this.prisma.$transaction(async (tx) => {
-      const caixa = await tx.caixa.findFirst({
-        where: { negocioId, operadorId: usuarioId, status: 'ABERTO' },
-      });
-      if (!caixa) throw new NotFoundException('Nenhum caixa aberto para você');
+      const where: any = { negocioId, status: 'ABERTO' };
+      if (dto.caixaId) {
+        where.id = dto.caixaId;
+      } else {
+        where.operadorId = usuarioId;
+      }
+
+      const caixa = await tx.caixa.findFirst({ where });
+      if (!caixa) throw new NotFoundException('Nenhum caixa aberto encontrado');
+
+      // OPERADOR só pode movimentar o próprio caixa
+      if (dto.caixaId && caixa.operadorId !== usuarioId) {
+        const membro = await tx.membroNegocio.findUnique({
+          where: { usuarioId_negocioId: { usuarioId, negocioId } },
+        });
+        const hierarquia: Record<string, number> = { SUPER_ADMIN: 100, GERENTE: 80, OPERADOR: 60, VISUALIZADOR: 20 };
+        if (!membro || (hierarquia[membro.role] || 0) < (hierarquia['GERENTE'] || 0)) {
+          throw new BadRequestException('Você só pode movimentar seu próprio caixa');
+        }
+      }
+
+      if (dto.tipo === 'SANGRIA') {
+        const movimentos = await tx.caixaMovimento.findMany({ where: { caixaId: caixa.id } });
+
+        const pedidoIds = movimentos
+          .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.pedidoId)
+          .map((m) => m.pedidoId!);
+        const pedidosComTroco = pedidoIds.length
+          ? await tx.pedido.findMany({ where: { id: { in: pedidoIds } }, select: { troco: true } })
+          : [];
+
+        const totalVendas = movimentos
+          .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO)
+          .reduce((s, m) => s + Number(m.valor), 0);
+        const totalSuprimentos = movimentos
+          .filter((m) => m.tipo === TipoMovimentoCaixa.SUPRIMENTO)
+          .reduce((s, m) => s + Number(m.valor), 0);
+        const totalSangrias = movimentos
+          .filter((m) => m.tipo === TipoMovimentoCaixa.SANGRIA)
+          .reduce((s, m) => s + Number(m.valor), 0);
+        const totalTroco = pedidosComTroco.reduce((s, p) => s + Number(p.troco ?? 0), 0);
+
+        const saldoDisponivel = Math.round(
+          (Number(caixa.saldoInicial) + totalVendas + totalSuprimentos - totalSangrias - totalTroco) * 100,
+        ) / 100;
+
+        if (dto.valor > saldoDisponivel) {
+          throw new BadRequestException(
+            `Saldo insuficiente em caixa. Disponível: R$ ${saldoDisponivel.toFixed(2)}`,
+          );
+        }
+      }
 
       return tx.caixaMovimento.create({
         data: {
@@ -265,5 +303,64 @@ export class CaixaService {
         descricao: `Venda #${pedidoId.slice(0, 8)}`,
       },
     });
+  }
+
+  private async calcularTotais(movimentos: any[]) {
+    const totalVendas = movimentos
+      .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO)
+      .reduce((s, m) => s + Number(m.valor), 0);
+
+    const totalDinheiro = movimentos
+      .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.formaPagamento === 'DINHEIRO')
+      .reduce((s, m) => s + Number(m.valor), 0);
+
+    const totalDebito = movimentos
+      .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.formaPagamento === 'CARTAO_DEBITO')
+      .reduce((s, m) => s + Number(m.valor), 0);
+
+    const totalCredito = movimentos
+      .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.formaPagamento === 'CARTAO_CREDITO')
+      .reduce((s, m) => s + Number(m.valor), 0);
+
+    const totalPix = movimentos
+      .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.formaPagamento === 'PIX')
+      .reduce((s, m) => s + Number(m.valor), 0);
+
+    const totalOutros = movimentos
+      .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && !['DINHEIRO', 'CARTAO_DEBITO', 'CARTAO_CREDITO', 'PIX'].includes(m.formaPagamento ?? ''))
+      .reduce((s, m) => s + Number(m.valor), 0);
+
+    const totalSangrias = movimentos
+      .filter((m) => m.tipo === TipoMovimentoCaixa.SANGRIA)
+      .reduce((s, m) => s + Number(m.valor), 0);
+
+    const totalSuprimentos = movimentos
+      .filter((m) => m.tipo === TipoMovimentoCaixa.SUPRIMENTO)
+      .reduce((s, m) => s + Number(m.valor), 0);
+
+    const pedidoIdsComPagamento = movimentos
+      .filter((m) => m.tipo === TipoMovimentoCaixa.PAGAMENTO && m.pedidoId)
+      .map((m) => m.pedidoId!);
+
+    const pedidosComTroco = pedidoIdsComPagamento.length
+      ? await this.prisma.pedido.findMany({
+          where: { id: { in: pedidoIdsComPagamento } },
+          select: { troco: true },
+        })
+      : [];
+
+    const totalTroco = pedidosComTroco.reduce((s, p) => s + Number(p.troco ?? 0), 0);
+
+    return {
+      totalVendas,
+      totalDinheiro,
+      totalDebito,
+      totalCredito,
+      totalPix,
+      totalOutros,
+      totalSangrias,
+      totalSuprimentos,
+      totalTroco,
+    };
   }
 }

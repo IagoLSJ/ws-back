@@ -3,6 +3,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ProdutosService } from './produtos.service';
 import { CriarProdutoDto } from './dto/criar-produto.dto';
 import { AtualizarProdutoDto } from './dto/atualizar-produto.dto';
+import { AjusteMassaProdutoDto } from './dto/ajuste-massa-produto.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -35,6 +36,16 @@ export class ProdutosController {
   @ApiOperation({ summary: 'Buscar produto por código de barras' })
   buscarPorCodigo(@Param('businessId') negocioId: string, @Param('codigo') codigo: string) {
     return this.service.buscarPorCodigoBarras(negocioId, codigo);
+  }
+
+  @Post('ajuste-massa')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Ajuste em massa de preços/custos' })
+  ajustarPrecosEmMassa(
+    @Param('businessId') negocioId: string,
+    @Body() dto: AjusteMassaProdutoDto,
+  ) {
+    return this.service.ajustarPrecosEmMassa(negocioId, dto);
   }
 
   @Get(':prodId')
