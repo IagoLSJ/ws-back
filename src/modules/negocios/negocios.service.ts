@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, Inject } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException, Inject } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { StorageService } from '../../infra/storage/storage.service';
 import { RedisService } from '../../infra/cache/redis.service';
@@ -128,8 +128,52 @@ export class NegociosService {
   }
 
   async remove(id: string) {
-    await this.findOne(id);
-    await this.prisma.negocio.update({ where: { id }, data: { ativo: false } });
+    const negocio = await this.findOne(id);
+    if (negocio.ativo) {
+      throw new BadRequestException('Desative o negócio antes de removê-lo');
+    }
+
+    const produtoIds = (
+      await this.prisma.produto.findMany({ where: { negocioId: id }, select: { id: true } })
+    ).map((p) => p.id);
+
+    if (produtoIds.length) {
+      const refEmOutros = await this.prisma.pedidoItem.findFirst({
+        where: { produtoId: { in: produtoIds }, pedido: { negocioId: { not: id } } },
+        select: { id: true },
+      });
+      if (refEmOutros) {
+        throw new BadRequestException(
+          'Este negócio possui produtos usados em pedidos de outros negócios e não pode ser removido',
+        );
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const carrinhos = await tx.carrinho.findMany({ where: { negocioId: id }, select: { id: true } });
+      const cIds = carrinhos.map((c) => c.id);
+      if (cIds.length) {
+        await tx.carrinhoItem.deleteMany({ where: { carrinhoId: { in: cIds } } });
+        await tx.carrinho.deleteMany({ where: { id: { in: cIds } } });
+      }
+
+      const pedidos = await tx.pedido.findMany({ where: { negocioId: id }, select: { id: true } });
+      const pIds = pedidos.map((p) => p.id);
+      if (pIds.length) {
+        await tx.caixaMovimento.deleteMany({ where: { pedidoId: { in: pIds } } });
+        await tx.pedidoItem.deleteMany({ where: { pedidoId: { in: pIds } } });
+        await tx.pagamento.deleteMany({ where: { pedidoId: { in: pIds } } });
+        await tx.pedido.deleteMany({ where: { id: { in: pIds } } });
+      }
+
+      await tx.movimentacaoEstoque.deleteMany({ where: { negocioId: id } });
+      await tx.contaReceber.deleteMany({ where: { negocioId: id } });
+      await tx.negocio.delete({ where: { id } });
+    });
+
+    await this.redis.del(`catalog:v2:${id}:products`).catch(() => {});
+
+    return { message: 'Negócio removido' };
   }
 
   async listarAtivos() {

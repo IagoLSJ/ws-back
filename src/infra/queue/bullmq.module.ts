@@ -2,10 +2,19 @@ import { Global, Module } from '@nestjs/common';
 import { BullModule as NestBullModule } from '@nestjs/bullmq';
 import { PrintJobProcessor } from './print-job.processor';
 
-function redisUrl(url: string): { host: string; port: number } {
+function redisConnection(url: string): Record<string, any> {
   try {
     const u = new URL(url);
-    return { host: u.hostname, port: parseInt(u.port) || 6379 };
+    const conn: Record<string, any> = {
+      host: u.hostname,
+      port: parseInt(u.port) || 6379,
+    };
+    if (u.username) conn.username = decodeURIComponent(u.username);
+    if (u.password) conn.password = decodeURIComponent(u.password);
+    if (u.protocol === 'rediss:') conn.tls = {};
+    if (u.searchParams.get('family')) conn.family = parseInt(u.searchParams.get('family')!, 10);
+    if (u.searchParams.get('db')) conn.db = parseInt(u.searchParams.get('db')!, 10);
+    return conn;
   } catch {
     return { host: 'localhost', port: 6379 };
   }
@@ -15,7 +24,7 @@ function redisUrl(url: string): { host: string; port: number } {
 @Module({
   imports: [
     NestBullModule.forRoot({
-      connection: redisUrl(process.env.REDIS_URL || 'redis://localhost:6379'),
+      connection: redisConnection(process.env.KV_URL || process.env.REDIS_URL || 'redis://localhost:6379'),
     }),
     NestBullModule.registerQueue({
       name: 'alertas-estoque',

@@ -29,6 +29,7 @@ import { ClientesModule } from './modules/clientes/clientes.module';
 import { ContasReceberModule } from './modules/contas-receber/contas-receber.module';
 import { FiscalModule } from './modules/fiscal/fiscal.module';
 import { CombosModule } from './modules/combos/combos.module';
+import { MercadoLivreModule } from './modules/mercadolivre/mercadolivre.module';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import configuration from './config/configuration';
 
@@ -40,8 +41,8 @@ import configuration from './config/configuration';
     }),
     ThrottlerModule.forRoot([
       {
-        ttl: 60000,
-        limit: 100,
+        ttl: parseInt(process.env.THROTTLE_TTL || '60000', 10),
+        limit: parseInt(process.env.THROTTLE_LIMIT || '100', 10),
       },
     ]),
     PrismaModule,
@@ -70,6 +71,7 @@ import configuration from './config/configuration';
     ContasReceberModule,
     FiscalModule,
     CombosModule,
+    MercadoLivreModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

@@ -70,6 +70,11 @@ export class AtualizarProdutoDto {
   @IsString()
   descricao?: string;
 
+  @ApiPropertyOptional({ example: 'Nestlé' })
+  @IsOptional()
+  @IsString()
+  marca?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
@@ -154,6 +159,23 @@ export class AtualizarProdutoDto {
   @IsOptional()
   @IsString()
   cfop?: string;
+
+  @ApiPropertyOptional({ description: 'Quantidade atual em estoque (usada ao criar item)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  quantidadeAtual?: number;
+
+  @ApiPropertyOptional({ description: 'Estoque mínimo do item' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  estoqueMinimo?: number;
+
+  @ApiPropertyOptional({ description: 'Unidade do estoque (ex: UN, KG)' })
+  @IsOptional()
+  @IsString()
+  unidade?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

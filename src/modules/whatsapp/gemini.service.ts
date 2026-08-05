@@ -23,15 +23,22 @@ export interface GeminiResponse {
 export class GeminiService {
   private readonly logger = new Logger(GeminiService.name);
   private readonly apiKey: string;
-  private readonly baseUrl = 'https://generativelanguage.googleapis.com/v1beta/openai';
-  private readonly defaultModel = 'gemini-2.0-flash';
-  private readonly modeloFallback = ['gemini-2.5-flash-lite', 'gemini-2.0-flash-lite'];
+  private readonly baseUrl: string;
+  private readonly defaultModel: string;
+  private readonly modeloFallback: string[];
 
   constructor(config: ConfigService) {
     this.apiKey = config.get<string>('gemini.apiKey') || '';
+    this.baseUrl = (config.get<string>('gemini.baseUrl') || 'https://generativelanguage.googleapis.com/v1beta/openai').replace(/\/+$/, '');
+    this.defaultModel = config.get<string>('gemini.model') || 'gemini-2.0-flash';
+    this.modeloFallback = config.get<string[]>('gemini.fallbackModels') || [];
     if (!this.apiKey) {
       this.logger.warn('GEMINI_API_KEY não configurada');
     }
+  }
+
+  private get isGoogle(): boolean {
+    return this.baseUrl.includes('generativelanguage.googleapis.com');
   }
 
   private async request(
@@ -100,7 +107,11 @@ export class GeminiService {
     maxTokens?: number,
   ): Promise<GeminiResponse> {
     const principal = model || this.defaultModel;
-    const fila = [principal, ...this.modeloFallback.filter((m) => m !== principal)];
+    // Em provedores externos (ex.: Groq) ignora nomes de modelo exclusivos do Gemini
+    const modelo = !this.isGoogle && principal.startsWith('gemini-') ? this.defaultModel : principal;
+    const fila = this.isGoogle
+      ? [modelo, ...this.modeloFallback.filter((m) => m !== modelo)]
+      : [modelo, ...this.modeloFallback.filter((m) => m !== modelo && !m.startsWith('gemini-'))];
     let ultimoErro: any;
 
     for (const m of fila) {
@@ -152,7 +163,7 @@ export class GeminiService {
   }
 
   async textToSpeech(texto: string): Promise<{ buffer: Buffer; mimeType: string } | null> {
-    if (!this.apiKey || !texto.trim()) return null;
+    if (!this.apiKey || !texto.trim() || !this.isGoogle) return null;
 
     const model = 'gemini-2.5-flash-preview-tts';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -202,6 +213,10 @@ export class GeminiService {
   }
 
   async transcribeAudio(buffer: Buffer, mimeType?: string): Promise<string> {
+    if (!this.isGoogle) {
+      return this.transcreverOpenaiCompatible(buffer, mimeType);
+    }
+
     const model = this.defaultModel;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
@@ -251,5 +266,34 @@ export class GeminiService {
       }
       throw err;
     }
+  }
+
+  /**
+   * Transcrição via endpoint OpenAI-compatível (ex.: Groq whisper-large-v3).
+   * Usado quando GEMINI_BASE_URL aponta para um provedor externo.
+   */
+  private async transcreverOpenaiCompatible(buffer: Buffer, mimeType?: string): Promise<string> {
+    const ext = mimeType?.includes('ogg') ? 'ogg' : mimeType?.includes('mp4') ? 'm4a' : 'mp3';
+    const form = new FormData();
+    form.append('model', 'whisper-large-v3');
+    form.append('file', new Blob([new Uint8Array(buffer)], { type: mimeType || 'audio/mpeg' }), `audio.${ext}`);
+
+    this.logger.log(`[GEMINI] transcrevendo via OpenAI-compatível (${this.baseUrl})`);
+    const res = await fetch(`${this.baseUrl}/audio/transcriptions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+      body: form,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      this.logger.error(`[GEMINI] transcricao OpenAI-compatível error (${res.status}): ${text.slice(0, 300)}`);
+      throw new Error(`Transcription error: ${res.status} ${text.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    const texto = (data.text || '').trim();
+    this.logger.log(`[GEMINI] transcricao OpenAI-compatível: "${texto.slice(0, 200)}"`);
+    return texto;
   }
 }

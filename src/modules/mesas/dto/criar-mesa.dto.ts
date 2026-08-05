@@ -1,9 +1,9 @@
-import { IsString, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsString, IsOptional, IsInt, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CriarMesaDto {
   @ApiProperty({ example: 1 })
-  @IsNumber()
+  @IsInt()
   @Min(1)
   numero!: number;
 

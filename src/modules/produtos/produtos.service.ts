@@ -6,6 +6,7 @@ import { CriarProdutoDto } from './dto/criar-produto.dto';
 import { AtualizarProdutoDto } from './dto/atualizar-produto.dto';
 import { AjusteMassaProdutoDto, CampoAjusteMassa, OperacaoAjusteMassa, TipoAjusteMassa } from './dto/ajuste-massa-produto.dto';
 import { v4 as uuidv4 } from 'uuid';
+import { verificarAbertoEm } from '../../common/utils/horario';
 
 @Injectable()
 export class ProdutosService {
@@ -25,6 +26,14 @@ export class ProdutosService {
     await this.redis.del(this.cacheKey(negocioId));
   }
 
+  private async invalidatePDVCache() {
+    try {
+      await this.redis.del('pdv:produtos:v1');
+    } catch {
+      // cache indisponível — ok
+    }
+  }
+
   private normalizeImagens(produto: any): void {
     if (produto.imagens) {
       for (const img of produto.imagens) {
@@ -33,13 +42,46 @@ export class ProdutosService {
     }
   }
 
+  private validarGruposModificadores(grupos: { nome?: string; opcoes?: { nome?: string }[] }[] | undefined): void {
+    if (!grupos?.length) return;
+
+    const nomesGrupos = grupos.map((g) => (g.nome || '').trim().toLowerCase());
+    for (let i = 0; i < nomesGrupos.length; i++) {
+      if (nomesGrupos[i] && nomesGrupos.indexOf(nomesGrupos[i]) !== i) {
+        throw new BadRequestException(`O produto possui grupos de modificadores com o mesmo nome: "${grupos[i].nome}"`);
+      }
+    }
+
+    for (const g of grupos) {
+      const nomesOpcoes = (g.opcoes || []).map((o) => (o.nome || '').trim().toLowerCase());
+      for (let i = 0; i < nomesOpcoes.length; i++) {
+        if (nomesOpcoes[i] && nomesOpcoes.indexOf(nomesOpcoes[i]) !== i) {
+          throw new BadRequestException(
+            `O grupo "${g.nome}" possui opções duplicadas: "${g.opcoes?.[i]?.nome}"`,
+          );
+        }
+      }
+    }
+  }
+
   async create(negocioId: string, dto: CriarProdutoDto) {
+    if (dto.plu) {
+      const comPlu = await this.prisma.produto.findFirst({
+        where: { negocioId, plu: dto.plu },
+        select: { id: true },
+      });
+      if (comPlu) throw new BadRequestException(`O PLU ${dto.plu} já está em uso por outro produto`);
+    }
+
+    this.validarGruposModificadores(dto.gruposModificadores);
+
     const produto = await this.prisma.produto.create({
       data: {
         negocioId,
         categoriaId: dto.categoriaId,
         nome: dto.nome,
         descricao: dto.descricao,
+        marca: dto.marca,
         preco: dto.preco,
         tipoDesconto: dto.tipoDesconto,
         valorDesconto: dto.valorDesconto,
@@ -51,6 +93,10 @@ export class ProdutosService {
         destaque: dto.destaque || false,
         ordem: dto.ordem || 0,
         controlaEstoque: dto.controlaEstoque ?? true,
+        vendaPorPeso: dto.vendaPorPeso ?? false,
+        unidadeMedida: dto.unidadeMedida,
+        ncm: dto.ncm,
+        cfop: dto.cfop,
         gruposModificadores: dto.gruposModificadores
           ? {
               create: dto.gruposModificadores.map((g) => ({
@@ -78,6 +124,7 @@ export class ProdutosService {
     });
 
     await this.invalidateCache(negocioId);
+    await this.invalidatePDVCache();
 
     if (produto.controlaEstoque) {
       const config = await this.prisma.configuracaoNegocio.findUnique({
@@ -87,9 +134,10 @@ export class ProdutosService {
         data: {
           negocioId,
           produtoId: produto.id,
-          quantidadeAtual: 0,
-          estoqueMinimo: config?.estoqueMinimoPadrao ?? 5,
+          quantidadeAtual: dto.quantidadeAtual ?? 0,
+          estoqueMinimo: dto.estoqueMinimo ?? config?.estoqueMinimoPadrao ?? 5,
           precoCusto: dto.precoCusto ?? undefined,
+          unidade: dto.unidade ?? dto.unidadeMedida ?? 'un',
         },
       });
     }
@@ -114,6 +162,16 @@ export class ProdutosService {
   }
 
   async findAllPDV() {
+    const cacheKey = 'pdv:produtos:v1';
+    const cached = await this.redis.get(cacheKey);
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch {
+        // cache corrompido — segue para recarregar
+      }
+    }
+
     const produtos = await this.prisma.produto.findMany({
       where: {
         status: 'ATIVO',
@@ -133,6 +191,12 @@ export class ProdutosService {
       },
     });
     for (const p of produtos) this.normalizeImagens(p);
+
+    try {
+      await this.redis.setex(cacheKey, 60, JSON.stringify(produtos));
+    } catch {
+      // cache indisponível — ok
+    }
     return produtos;
   }
 
@@ -153,6 +217,16 @@ export class ProdutosService {
 
   async update(negocioId: string, id: string, dto: AtualizarProdutoDto) {
     const existing = await this.findOne(negocioId, id);
+
+    if (dto.plu) {
+      const comPlu = await this.prisma.produto.findFirst({
+        where: { negocioId, plu: dto.plu, NOT: { id } },
+        select: { id: true },
+      });
+      if (comPlu) throw new BadRequestException(`O PLU ${dto.plu} já está em uso por outro produto`);
+    }
+
+    this.validarGruposModificadores(dto.gruposModificadores);
 
     const data: any = { ...dto };
     delete data.gruposModificadores;
@@ -227,9 +301,10 @@ export class ProdutosService {
             data: {
               negocioId,
               produtoId: id,
-              quantidadeAtual: 0,
-              estoqueMinimo: config?.estoqueMinimoPadrao ?? 5,
+              quantidadeAtual: dto.quantidadeAtual ?? 0,
+              estoqueMinimo: dto.estoqueMinimo ?? config?.estoqueMinimoPadrao ?? 5,
               precoCusto: dto.precoCusto ?? existing.precoCusto ?? undefined,
+              unidade: dto.unidade ?? dto.unidadeMedida ?? 'un',
             },
           });
         }
@@ -239,6 +314,7 @@ export class ProdutosService {
     }
 
     await this.invalidateCache(negocioId);
+    await this.invalidatePDVCache();
     return produto;
   }
 
@@ -270,6 +346,7 @@ export class ProdutosService {
     });
 
     await this.invalidateCache(negocioId);
+    await this.invalidatePDVCache();
   }
 
   async requestUploadUrl(negocioId: string, produtoId: string, fileName: string, fileSize?: number) {
@@ -449,7 +526,7 @@ export class ProdutosService {
         descricao: true,
         logoUrl: true,
         bannerUrl: true,
-        configuracoes: { select: { taxaFrete: true, endereco: true, telefoneContato: true, horarioFuncionamento: true } },
+        configuracoes: { select: { taxaFrete: true, endereco: true, telefoneContato: true, horarioFuncionamento: true, taxaCartaoFaixas: true } },
         taxasFreteBairro: { where: { ativo: true }, select: { bairro: true, taxa: true } },
       },
     });
@@ -507,17 +584,7 @@ export class ProdutosService {
   }
 
   private verificarAberto(horario: { dias?: { abertura: string; fechamento: string; fechado: boolean }[] } | null): boolean {
-    if (!horario?.dias?.length) return true;
-
-    const agora = new Date();
-    const hoje = horario.dias[agora.getDay()];
-    if (!hoje || hoje.fechado) return false;
-
-    const minutosAtual = agora.getHours() * 60 + agora.getMinutes();
-    const [hInicio, mInicio] = (hoje.abertura || '00:00').split(':').map(Number);
-    const [hFim, mFim] = (hoje.fechamento || '23:59').split(':').map(Number);
-
-    return minutosAtual >= (hInicio * 60 + mInicio) && minutosAtual <= (hFim * 60 + mFim);
+    return verificarAbertoEm(horario as any, new Date());
   }
 
   async ajustarPrecosEmMassa(negocioId: string, dto: AjusteMassaProdutoDto) {
@@ -602,6 +669,7 @@ export class ProdutosService {
 
     if (resumo.length) {
       await this.invalidateCache(negocioId);
+      await this.invalidatePDVCache();
     }
 
     return {

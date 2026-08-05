@@ -22,6 +22,14 @@ docker/nginx/certs/
 # Railway
 .railway/
 
+# Load test / scripts de carga
+loadtest/
+docker-compose.loadtest.yml
+
+# Scripts avulsos de debug/scratch
+check-imgs.ts
+*.tsbuildinfo
+
 #load-test
 load-test/
 .env.*

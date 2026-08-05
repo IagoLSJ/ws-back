@@ -1,7 +1,17 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { AdicionarAoCarrinhoDto } from './dto/adicionar-ao-carrinho.dto';
+import { AdicionarComboAoCarrinhoDto } from './dto/adicionar-combo-carrinho.dto';
 import { calcularPrecoFinal } from '../../common/utils/preco';
+import { v4 as uuidv4 } from 'uuid';
+
+interface ItemParaTotal {
+  comboRef?: string | null;
+  comboPreco?: { toNumber(): number } | number | null;
+  quantidade: { toNumber(): number } | number;
+  produto: { preco: { toNumber(): number } | number; tipoDesconto?: string | null; valorDesconto?: { toNumber(): number } | number | null };
+  opcoesSelecionadas: Array<{ opcao: { precoExtra: { toNumber(): number } | number } }>;
+}
 
 @Injectable()
 export class CarrinhoService {
@@ -42,6 +52,27 @@ export class CarrinhoService {
     return carrinho;
   }
 
+  private calcularTotalItens(itens: ItemParaTotal[]): number {
+    const gruposCombo = new Map<string, number>();
+    let total = 0;
+
+    for (const item of itens) {
+      const precoBase = calcularPrecoFinal(item.produto);
+      const extra = item.opcoesSelecionadas.reduce((s, o) => s + Number(o.opcao.precoExtra), 0);
+
+      if (item.comboRef) {
+        if (!gruposCombo.has(item.comboRef)) {
+          gruposCombo.set(item.comboRef, Number(item.comboPreco ?? 0));
+        }
+      } else {
+        total += (precoBase + extra) * Number(item.quantidade);
+      }
+    }
+
+    for (const precoCombo of gruposCombo.values()) total += precoCombo;
+    return total;
+  }
+
   async listar(slug: string, sessionId: string) {
     const negocioId = await this.resolveNegocioId(slug);
     const carrinho = await this.obterOuCriarCarrinho(negocioId, sessionId);
@@ -55,6 +86,7 @@ export class CarrinhoService {
             preco: true,
             tipoDesconto: true,
             valorDesconto: true,
+            vendaPorPeso: true,
             imagens: { take: 1, where: { principal: true } },
           },
         },
@@ -62,16 +94,42 @@ export class CarrinhoService {
       },
     });
 
-    const total = itens.reduce((acc, item) => {
-      const precoBase = calcularPrecoFinal(item.produto);
-      const extraOpcoes = item.opcoesSelecionadas.reduce(
-        (s, o) => s + Number(o.opcao.precoExtra),
-        0,
-      );
-      return acc + (precoBase + extraOpcoes) * Number(item.quantidade);
-    }, 0);
-
+    const total = this.calcularTotalItens(itens);
     return { itens, total: Math.round(total * 100) / 100 };
+  }
+
+  async adicionarCombo(slug: string, sessionId: string, dto: AdicionarComboAoCarrinhoDto, usuarioId?: string) {
+    const negocioId = await this.resolveNegocioId(slug);
+
+    const combo = await this.prisma.combo.findFirst({
+      where: { id: dto.comboId, negocioId, ativo: true },
+      include: { itens: { include: { produto: { select: { id: true, nome: true, status: true } } } } },
+    });
+    if (!combo) throw new NotFoundException('Combo não encontrado ou inativo');
+    if (!combo.itens.length) throw new BadRequestException('Combo sem itens');
+
+    for (const ci of combo.itens) {
+      if (ci.produto.status !== 'ATIVO') {
+        throw new BadRequestException(`O produto "${ci.produto.nome}" do combo está inativo`);
+      }
+    }
+
+    const carrinho = await this.obterOuCriarCarrinho(negocioId, sessionId, usuarioId, dto.mesaId);
+    const comboRef = uuidv4();
+    const comboPreco = Number(combo.preco);
+
+    await this.prisma.carrinhoItem.createMany({
+      data: combo.itens.map((ci) => ({
+        carrinhoId: carrinho.id,
+        produtoId: ci.produtoId,
+        quantidade: ci.quantidade,
+        comboRef,
+        comboNome: combo.nome,
+        comboPreco,
+      })),
+    });
+
+    return this.listar(slug, sessionId);
   }
 
   async adicionar(

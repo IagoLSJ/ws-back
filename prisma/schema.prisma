@@ -147,7 +147,7 @@ model Negocio {
   mesas             Mesa[]
   contasReceber     ContaReceber[]
   combos            Combo[]
-
+  integracaoML      IntegracaoMercadoLivre?
   @@map("negocios")
 }
 
@@ -324,6 +324,7 @@ model Produto {
   categoriaId          String?
   nome                 String
   descricao            String?
+  marca                String?
   preco                Decimal        @db.Decimal(10, 2)
   tipoDesconto         String?
   valorDesconto        Decimal?       @db.Decimal(10, 2)
@@ -550,6 +551,9 @@ model CarrinhoItem {
   produtoId  String
   quantidade Decimal  @default(1) @db.Decimal(10, 3)
   observacao String?
+  comboRef   String?
+  comboNome  String?
+  comboPreco Decimal? @db.Decimal(10, 2)
   criadoEm   DateTime @default(now())
 
   carrinho           Carrinho                      @relation(fields: [carrinhoId], references: [id], onDelete: Cascade)
@@ -694,4 +698,18 @@ model Pagamento {
 
   @@index([pedidoId])
   @@map("pagamentos")
+}
+
+model IntegracaoMercadoLivre {
+  id           String   @id @default(uuid())
+  negocioId    String   @unique
+  accessToken  String
+  refreshToken String?
+  expiresAt    DateTime?
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  negocio Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+
+  @@map("integracoes_mercadolivre")
 }

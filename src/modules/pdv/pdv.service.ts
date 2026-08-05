@@ -64,6 +64,16 @@ export class PdvService {
 
     const itensData = await Promise.all(dto.itens.map(async (item) => {
       const produto = produtos.find((p) => p.id === item.produtoId)!;
+      const quantidade = item.quantidade ?? 1;
+      if (produto.vendaPorPeso) {
+        if (!Number.isFinite(quantidade) || quantidade < 0.001) {
+          throw new BadRequestException(`Peso inválido para "${produto.nome}"`);
+        }
+      } else {
+        if (!Number.isInteger(quantidade) || quantidade < 1) {
+          throw new BadRequestException(`Quantidade inválida para "${produto.nome}"`);
+        }
+      }
       let precoUnitario = calcularPrecoFinal(produto);
 
       let modificadores: any[] = [];
@@ -84,7 +94,7 @@ export class PdvService {
         produtoId: produto.id,
         produtoNome: produto.nome,
         precoUnitario: Math.round(precoUnitario * 100) / 100,
-        quantidade: item.quantidade ?? 1,
+        quantidade,
         modificadores: modificadores.length ? modificadores : undefined,
       };
     }));

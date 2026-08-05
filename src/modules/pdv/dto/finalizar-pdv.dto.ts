@@ -12,6 +12,7 @@ import {
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MetodoPagamento, TipoEntrega } from '@prisma/client';
+import { IsCpfOuCnpj } from '../../../common/decorators/is-cpf-cnpj.decorator';
 
 class DescontoDto {
   @ApiProperty({ enum: ['PERCENTUAL', 'FIXO'] })
@@ -32,7 +33,7 @@ class ItemPdvDto {
   @ApiPropertyOptional({ default: 1 })
   @IsOptional()
   @IsNumber()
-  @Min(0)
+  @Min(0.001)
   quantidade?: number;
 
   @ApiPropertyOptional()
@@ -88,9 +89,10 @@ export class FinalizarPdvDto {
   @IsString()
   agendadoPara?: string;
 
-  @ApiPropertyOptional({ example: '123.456.789-00' })
+  @ApiPropertyOptional({ example: '123.456.789-09' })
   @IsOptional()
   @IsString()
+  @IsCpfOuCnpj()
   clienteCpf?: string;
 
   @ApiPropertyOptional({ example: 'João Silva' })

@@ -10,7 +10,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { MetodoPagamento } from '@prisma/client';
+import { MetodoPagamento, TipoEntrega } from '@prisma/client';
 
 export class ItemPedidoWhatsappDto {
   @ApiProperty({ example: 'uuid-do-produto' })
@@ -20,7 +20,7 @@ export class ItemPedidoWhatsappDto {
   @ApiPropertyOptional({ example: 2 })
   @IsOptional()
   @IsNumber()
-  @Min(1)
+  @Min(0.001)
   quantidade?: number;
 
   @ApiPropertyOptional({ example: 'Sem cebola' })
@@ -53,8 +53,8 @@ export class CriarPedidoWhatsappDto {
 
   @ApiPropertyOptional({ example: 'RETIRADA', enum: ['RETIRADA', 'ENTREGA'] })
   @IsOptional()
-  @IsString()
-  tipoEntrega?: 'RETIRADA' | 'ENTREGA';
+  @IsEnum(TipoEntrega)
+  tipoEntrega?: TipoEntrega;
 
   @ApiPropertyOptional({ example: { logradouro: 'Rua A', numero: '123', bairro: 'Centro' } })
   @IsOptional()

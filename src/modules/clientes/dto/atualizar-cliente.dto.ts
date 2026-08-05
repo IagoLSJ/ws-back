@@ -1,10 +1,12 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsCpfOuCnpj } from '../../../common/decorators/is-cpf-cnpj.decorator';
 
 export class AtualizarClienteDto {
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: '123.456.789-09' })
   @IsOptional()
   @IsString()
+  @IsCpfOuCnpj()
   cpfCnpj?: string;
 
   @ApiPropertyOptional()

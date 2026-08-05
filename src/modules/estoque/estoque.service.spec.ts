@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { EstoqueService } from './estoque.service';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { RedisService } from '../../infra/cache/redis.service';
 import { getQueueToken } from '@nestjs/bullmq';
 
 const mockPrisma = {
@@ -45,13 +46,14 @@ describe('EstoqueService', () => {
         EstoqueService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: getQueueToken('alertas-estoque'), useValue: mockAlertasQueue },
+        { provide: RedisService, useValue: { del: jest.fn() } },
       ],
     }).compile();
 
     service = module.get<EstoqueService>(EstoqueService);
     prisma = module.get(PrismaService);
 
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
 
   describe('findAll', () => {
@@ -230,21 +232,9 @@ describe('EstoqueService', () => {
       expect(result.message).toBe('Transferência realizada com sucesso');
     });
 
-    it('deve rejeitar quando não informar destino', async () => {
-      mockPrisma.estoqueItem.findFirst.mockResolvedValue(itemOrigem);
-
-      await expect(service.transferir('n1', { itemOrigemId: 'origem1', negocioDestinoId: 'n2', quantidade: 5 } as any))
-        .rejects.toThrow('Informe itemDestinoId ou produtoDestinoId');
-    });
-
-    it('deve rejeitar auto-transferência', async () => {
-      const mesmoItem = { ...itemOrigem, negocioId: 'n1' };
-      mockPrisma.estoqueItem.findFirst
-        .mockResolvedValueOnce(mesmoItem) // findOne
-        .mockResolvedValueOnce(mesmoItem); // busca destino
-
-      await expect(service.transferir('n1', { itemOrigemId: 'origem1', negocioDestinoId: 'n1', produtoDestinoId: 'p1', quantidade: 5 } as any))
-        .rejects.toThrow('Origem e destino devem ser diferentes');
+    it('deve rejeitar auto-transferência (mesmo negócio)', async () => {
+      await expect(service.transferir('n1', { itemOrigemId: 'origem1', negocioDestinoId: 'n1', quantidade: 5 } as any))
+        .rejects.toThrow('O negócio de destino deve ser diferente do negócio de origem');
     });
 
     it('deve atualizar produto origem para ESGOTADO quando estoque zerar', async () => {

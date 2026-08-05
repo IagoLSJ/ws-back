@@ -30,5 +30,15 @@ export default () => ({
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
     model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+    baseUrl: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai',
+    fallbackModels: (process.env.GEMINI_FALLBACK_MODELS || '')
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean),
+  },
+  mercadolivre: {
+    appId: process.env.MERCADOLIVRE_APP_ID || '',
+    secret: process.env.MERCADOLIVRE_SECRET || '',
+    redirectUri: process.env.MERCADOLIVRE_REDIRECT_URI || '',
   },
 });

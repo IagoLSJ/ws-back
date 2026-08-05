@@ -1,0 +1,90 @@
+# Simulação do ambiente da Vercel (plano free) para o backend.
+# - Memória: 1024MB (limite das serverless functions no free)
+# - CPU: ~1 vCPU (functions compartilhadas)
+# - Sem swap (memswap_limit = mem_limit)
+# - Node heap limitado (como a Vercel faz)
+#
+# Uso:
+#   docker compose -f docker-compose.vercel.yml up --build
+#   docker compose -f docker-compose.vercel.yml stats   # monitorar CPU/RAM em tempo real
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    mem_limit: 1024m
+    memswap_limit: 1024m
+    cpus: "1.0"
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=512"
+      API_PORT: 3000
+      DATABASE_URL: ${DATABASE_URL:-postgresql://user:pass@postgres:5432/multinegocio}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-jwt-refresh-secret}
+      JWT_ACCESS_EXPIRES: ${JWT_ACCESS_EXPIRES:-15m}
+      JWT_REFRESH_EXPIRES: ${JWT_REFRESH_EXPIRES:-7d}
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_S3_ENDPOINT: ${SUPABASE_S3_ENDPOINT:-${MINIO_ENDPOINT_URL}}
+      SUPABASE_S3_ACCESS_KEY: ${SUPABASE_S3_ACCESS_KEY:-${MINIO_ACCESS_KEY}}
+      SUPABASE_S3_SECRET_KEY: ${SUPABASE_S3_SECRET_KEY:-${MINIO_SECRET_KEY}}
+      SUPABASE_BUCKET: ${SUPABASE_BUCKET:-multinegocio}
+      SUPABASE_S3_REGION: ${SUPABASE_S3_REGION:-us-east-1}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      META_WHATSAPP_TOKEN: ${META_WHATSAPP_TOKEN:-}
+      META_WHATSAPP_PHONE_NUMBER_ID: ${META_WHATSAPP_PHONE_NUMBER_ID:-}
+      MERCADOLIVRE_APP_ID: ${MERCADOLIVRE_APP_ID:-}
+      MERCADOLIVRE_SECRET: ${MERCADOLIVRE_SECRET:-}
+      MERCADOLIVRE_REDIRECT_URI: ${MERCADOLIVRE_REDIRECT_URI:-}
+      THROTTLE_TTL: ${THROTTLE_TTL:-60000}
+      THROTTLE_LIMIT: ${THROTTLE_LIMIT:-100}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_vercel_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: multinegocio
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d multinegocio"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_vercel_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pg_vercel_data:
+  redis_vercel_data:

@@ -5,6 +5,7 @@ import {
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { CarrinhoService } from './carrinho.service';
 import { AdicionarAoCarrinhoDto } from './dto/adicionar-ao-carrinho.dto';
+import { AdicionarComboAoCarrinhoDto } from './dto/adicionar-combo-carrinho.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { SessionId } from '../../common/decorators/session-id.decorator';
 
@@ -28,6 +29,16 @@ export class CarrinhoController {
     @Body() dto: AdicionarAoCarrinhoDto,
   ) {
     return this.service.adicionar(slug, sessionId, dto);
+  }
+
+  @Post('combo')
+  @ApiOperation({ summary: 'Adicionar combo ao carrinho (preço fechado)' })
+  adicionarCombo(
+    @Param('slug') slug: string,
+    @SessionId() sessionId: string,
+    @Body() dto: AdicionarComboAoCarrinhoDto,
+  ) {
+    return this.service.adicionarCombo(slug, sessionId, dto);
   }
 
   @Patch(':itemId')

@@ -75,6 +75,11 @@ export class CriarProdutoDto {
   @IsString()
   descricao?: string;
 
+  @ApiPropertyOptional({ example: 'Nestlé' })
+  @IsOptional()
+  @IsString()
+  marca?: string;
+
   @ApiProperty({ example: 25.9 })
   @IsNumber()
   @Min(0)
@@ -153,6 +158,23 @@ export class CriarProdutoDto {
   @IsOptional()
   @IsString()
   cfop?: string;
+
+  @ApiPropertyOptional({ description: 'Quantidade inicial em estoque' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  quantidadeAtual?: number;
+
+  @ApiPropertyOptional({ description: 'Estoque mínimo do item' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  estoqueMinimo?: number;
+
+  @ApiPropertyOptional({ description: 'Unidade do estoque (ex: UN, KG)' })
+  @IsOptional()
+  @IsString()
+  unidade?: string;
 
   @ApiPropertyOptional({ type: [GrupoModificadorDto] })
   @IsOptional()

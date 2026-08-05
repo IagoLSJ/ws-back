@@ -6,8 +6,10 @@ import { EstoqueService } from '../estoque/estoque.service';
 import { ImprimirService } from '../imprimir/imprimir.service';
 import { CaixaService } from '../caixa/caixa.service';
 import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao, TipoEntrega } from '@prisma/client';
+import { verificarAbertoEm } from '../../common/utils/horario';
 import { calcularPrecoFinal } from '../../common/utils/preco';
 import { converterPeso } from '../../common/utils/unidade';
+import { calcularTaxaCartao } from '../../common/utils/taxa-cartao';
 
 const TRANSICOES_VALIDAS: Record<StatusPedido, StatusPedido[]> = {
   [StatusPedido.PENDENTE]: [StatusPedido.CONFIRMADO, StatusPedido.CANCELADO],
@@ -52,13 +54,70 @@ export class PedidosService {
   }
 
   private verificarAbertoEm(horario: { dias?: { abertura: string; fechamento: string; fechado: boolean }[] } | null, data: Date): boolean {
-    if (!horario?.dias?.length) return true;
-    const hoje = horario.dias[data.getDay()];
-    if (!hoje || hoje.fechado) return false;
-    const minutos = data.getHours() * 60 + data.getMinutes();
-    const [hInicio, mInicio] = (hoje.abertura || '00:00').split(':').map(Number);
-    const [hFim, mFim] = (hoje.fechamento || '23:59').split(':').map(Number);
-    return minutos >= (hInicio * 60 + mInicio) && minutos <= (hFim * 60 + mFim);
+    return verificarAbertoEm(horario as any, data);
+  }
+
+  /**
+   * Monta os itens do pedido respeitando o preço fechado dos combos.
+   * Itens de um mesmo combo (comboRef) são rateados proporcionalmente ao preço
+   * individual, de forma que a soma deles seja exatamente o preço do combo.
+   */
+  private montarItensPedido(carrinhoItens: any[]): { itensData: any[]; totalProdutos: number } {
+    const normais = carrinhoItens.filter((i) => !i.comboRef);
+    const grupos = new Map<string, any[]>();
+    for (const item of carrinhoItens) {
+      if (item.comboRef) {
+        if (!grupos.has(item.comboRef)) grupos.set(item.comboRef, []);
+        grupos.get(item.comboRef)!.push(item);
+      }
+    }
+
+    const itensData: any[] = [];
+    let totalProdutos = 0;
+
+    const precoNormal = (item: any) =>
+      calcularPrecoFinal(item.produto) +
+      item.opcoesSelecionadas.reduce((s: number, o: any) => s + Number(o.opcao.precoExtra), 0);
+
+    const montarItem = (item: any, precoUnitario: number) => ({
+      produtoId: item.produto.id,
+      produtoNome: item.produto.nome,
+      precoUnitario: Math.round(precoUnitario * 100) / 100,
+      quantidade: item.quantidade,
+      modificadores: item.opcoesSelecionadas.map((o: any) => ({
+        nome: o.opcao.nome,
+        precoExtra: Number(o.opcao.precoExtra),
+      })),
+    });
+
+    for (const item of normais) {
+      const precoUnitario = precoNormal(item);
+      itensData.push(montarItem(item, precoUnitario));
+      totalProdutos += precoUnitario * Number(item.quantidade);
+    }
+
+    for (const itens of grupos.values()) {
+      const comboPreco = Number(itens[0].comboPreco ?? 0);
+      const pesos = itens.map((i) => ({ item: i, peso: precoNormal(i) * Number(i.quantidade) }));
+      const somaPesos = pesos.reduce((s, p) => s + p.peso, 0);
+      let alocada = 0;
+
+      pesos.forEach((p, idx) => {
+        const ultimo = idx === pesos.length - 1;
+        let total = somaPesos > 0 ? (comboPreco * p.peso) / somaPesos : comboPreco / pesos.length;
+        total = Math.max(0, total);
+        if (ultimo) total = comboPreco - alocada;
+        else total = Math.round(total * 100) / 100;
+        alocada += total;
+
+        const precoUnitario = Number(p.item.quantidade) > 0 ? total / Number(p.item.quantidade) : 0;
+        itensData.push(montarItem(p.item, precoUnitario));
+      });
+
+      totalProdutos += comboPreco;
+    }
+
+    return { itensData, totalProdutos: Math.round(totalProdutos * 100) / 100 };
   }
 
   private async baixarEstoque(negocioId: string, pedido: any, usuarioId?: string) {
@@ -227,6 +286,7 @@ export class PedidosService {
       },
     });
     for (const item of carrinho.itens) {
+      if (item.comboRef) continue; // combo é bundle fechado, sem seleção de modificadores
       const prod = produtosComGrupos.find((p) => p.id === item.produto.id);
       if (!prod) continue;
       for (const grupo of prod.gruposModificadores) {
@@ -254,26 +314,7 @@ export class PedidosService {
       }
     }
 
-    const itensData = carrinho.itens.map((item) => {
-      const precoBase = calcularPrecoFinal(item.produto);
-      const extraOpcoes = item.opcoesSelecionadas.reduce(
-        (s, o) => s + Number(o.opcao.precoExtra),
-        0,
-      );
-      const precoUnitario = precoBase + extraOpcoes;
-      return {
-        produtoId: item.produto.id,
-        produtoNome: item.produto.nome,
-        precoUnitario: Math.round(precoUnitario * 100) / 100,
-        quantidade: item.quantidade,
-        modificadores: item.opcoesSelecionadas.map((o) => ({
-          nome: o.opcao.nome,
-          precoExtra: Number(o.opcao.precoExtra),
-        })),
-      };
-    });
-
-    const totalProdutos = itensData.reduce((acc, i) => acc + i.precoUnitario * Number(i.quantidade), 0);
+    const { itensData, totalProdutos } = this.montarItensPedido(carrinho.itens);
 
     let mesaData: { mesaId?: string; mesaNumero?: number } = {};
     if (dto.tipoEntrega === 'MESA' && !dto.mesaId) {
@@ -302,7 +343,24 @@ export class PedidosService {
         taxaFrete = Number(config?.taxaFrete ?? 0);
       }
     }
-    const valorTotal = Math.round((totalProdutos + taxaFrete) * 100) / 100;
+    let valorTotal = Math.round((totalProdutos + taxaFrete) * 100) / 100;
+
+    // Taxa de cartão (repasse): crédito e débito
+    let taxaCartao = 0;
+    const ehCartao =
+      dto.metodoPagamento === MetodoPagamento.CARTAO_CREDITO ||
+      dto.metodoPagamento === MetodoPagamento.CARTAO_DEBITO;
+    if (ehCartao) {
+      const faixas = Array.isArray(config?.taxaCartaoFaixas)
+        ? (config.taxaCartaoFaixas as { ate: number; valor: number }[])
+        : [];
+      taxaCartao = calcularTaxaCartao(valorTotal, faixas);
+      valorTotal = Math.round((valorTotal + taxaCartao) * 100) / 100;
+    }
+
+    const troco = dto.metodoPagamento === MetodoPagamento.DINHEIRO && dto.trocoPara && dto.trocoPara > valorTotal
+      ? Math.round((dto.trocoPara - valorTotal) * 100) / 100
+      : undefined;
 
     let pedido: any;
 
@@ -319,6 +377,8 @@ export class PedidosService {
           observacao: dto.observacao,
           endereco: dto.tipoEntrega === TipoEntrega.MESA ? undefined : (dto.enderecoEntrega ? dto.enderecoEntrega as any : undefined),
           contato: dto.contato,
+          troco: troco || undefined,
+          taxaCartao: taxaCartao || undefined,
           agendadoPara: dto.agendadoPara
             ? (() => {
                 const data = new Date(dto.agendadoPara);

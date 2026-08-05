@@ -10,13 +10,16 @@
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:e2e": "jest --config ./test/jest-e2e.json --forceExit",
     "mock:meta": "node scripts/meta-mock.mjs",
     "mock:chat": "node scripts/mock-chat.mjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:push": "prisma db push",
-    "prisma:seed": "ts-node prisma/seed.ts"
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "imagens:importar": "ts-node scripts/importar-imagens.ts",
+    "imagens:ml": "ts-node scripts/importar-imagens-ml.ts",
+    "test:integracao": "node scripts/teste-mesas-integracao.mjs && node scripts/teste-carrinho-isolado.mjs && node scripts/teste-estoque-integracao.mjs && node scripts/teste-multinegocio.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1079.0",
@@ -63,6 +66,7 @@
     "@types/node": "^26.1.0",
     "@types/passport-jwt": "^4.0.1",
     "@types/pg": "^8.20.0",
+    "@types/supertest": "^7.2.1",
     "@types/uuid": "^9.0.8",
     "@typescript-eslint/eslint-plugin": "^8.62.1",
     "@typescript-eslint/parser": "^8.62.1",

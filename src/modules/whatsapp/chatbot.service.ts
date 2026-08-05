@@ -3,6 +3,7 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { RedisService } from '../../infra/cache/redis.service';
 import { GeminiService } from './gemini.service';
 import { MetaWhatsappService } from './meta-whatsapp.service';
+import { calcularTaxaCartao } from '../../common/utils/taxa-cartao';
 import { ImprimirService } from '../imprimir/imprimir.service';
 import { MetodoPagamento, ProdutoStatus, TipoMensagemWhatsApp, TipoEntrega } from '@prisma/client';
 
@@ -323,7 +324,8 @@ export class ChatbotService {
       observacao,
     };
 
-    const resumo = this.resumirPedido(contexto.pedidoRascunho);
+    const faixasCartao = await this.carregarFaixasCartao(negocioId);
+    const resumo = this.resumirPedido(contexto.pedidoRascunho, faixasCartao);
     return {
       texto: `📋 *Confirma seu pedido?*\n\n${resumo}\n\nÉ isso mesmo?`,
       estado: 'CONFIRMAR',
@@ -374,12 +376,35 @@ export class ChatbotService {
     return { itens: validos, pendente: null };
   }
 
-  private resumirPedido(r: PedidoRascunho): string {
+  private ehCartao(pagamento?: string): boolean {
+    const p = (pagamento || '').toUpperCase();
+    return p === 'CARTAO_CREDITO' || p === 'CARTAO_DEBITO';
+  }
+
+  private async carregarFaixasCartao(negocioId: string): Promise<{ ate: number; valor: number }[]> {
+    const config = await this.prisma.configuracaoNegocio.findUnique({ where: { negocioId } });
+    return Array.isArray(config?.taxaCartaoFaixas)
+      ? (config.taxaCartaoFaixas as { ate: number; valor: number }[])
+      : [];
+  }
+
+  private resumirPedido(r: PedidoRascunho, faixasCartao?: { ate: number; valor: number }[]): string {
     const linhas = r.itens.map(
       (i) => `${i.quantidade}x ${i.produtoNome}${i.modificadores ? ` (${i.modificadores})` : ''} - R$ ${((i.precoUnitario || 0) * i.quantidade).toFixed(2)}`,
     );
     const total = r.itens.reduce((acc, i) => acc + (i.precoUnitario || 0) * i.quantidade, 0);
-    let resumo = linhas.join('\n') + `\n*Total: R$ ${total.toFixed(2)}*`;
+
+    let totalFinal = total;
+    let textoTaxa = '';
+    if (faixasCartao?.length && this.ehCartao(r.pagamento)) {
+      const taxa = calcularTaxaCartao(total, faixasCartao);
+      if (taxa > 0) {
+        totalFinal = Math.round((total + taxa) * 100) / 100;
+        textoTaxa = `\nTaxa cartão: R$ ${taxa.toFixed(2)}`;
+      }
+    }
+
+    let resumo = linhas.join('\n') + `\n*Total: R$ ${totalFinal.toFixed(2)}*${textoTaxa}`;
     if (r.pagamento) resumo += `\nPagamento: ${r.pagamento}`;
     if (r.endereco) resumo += `\nEntrega: ${r.endereco}`;
     else if (r.tipoEntrega === 'ENTREGA') resumo += '\nEntrega: (informe o endereço)';
@@ -402,9 +427,18 @@ export class ChatbotService {
     }
 
     const total = rascunho.itens.reduce((acc, i) => acc + (i.precoUnitario || 0) * i.quantidade, 0);
-    const metodoPagamento = rascunho.pagamento || 'PIX';
+    const metodoPagamento = (rascunho.pagamento || 'PIX').toUpperCase();
     const tipoEntrega = rascunho.tipoEntrega === 'ENTREGA' ? 'ENTREGA' : 'RETIRADA';
     const endereco = rascunho.endereco;
+
+    // Taxa de cartão (repasse): crédito e débito
+    let taxaCartao = 0;
+    let totalFinal = Math.round(total * 100) / 100;
+    if (this.ehCartao(metodoPagamento)) {
+      const faixas = await this.carregarFaixasCartao(negocioId);
+      taxaCartao = calcularTaxaCartao(totalFinal, faixas);
+      totalFinal = Math.round((totalFinal + taxaCartao) * 100) / 100;
+    }
 
     const itensPedido = rascunho.itens.map((i) => ({
       produtoId: i.produtoId!,
@@ -419,7 +453,8 @@ export class ChatbotService {
         negocioId,
         sessionId: cliente.sessionId,
         status: 'CONFIRMADO',
-        total,
+        total: totalFinal,
+        taxaCartao: taxaCartao || undefined,
         tipoEntrega: tipoEntrega as TipoEntrega,
         endereco: endereco ? { enderecoCompleto: endereco } : undefined,
         contato: telefone,
@@ -427,7 +462,7 @@ export class ChatbotService {
         itens: { create: itensPedido },
         pagamentos: {
           create: {
-            valor: total,
+            valor: totalFinal,
             metodo: metodoPagamento as MetodoPagamento,
             status: 'PENDENTE',
           },
@@ -436,11 +471,12 @@ export class ChatbotService {
       include: { itens: true, pagamentos: true },
     });
 
-    this.logger.log(`[PEDIDO] criado #${pedido.id} | total=R$${total.toFixed(2)} | pagamento=${metodoPagamento} | entrega=${tipoEntrega}`);
+    this.logger.log(`[PEDIDO] criado #${pedido.id} | total=R$${totalFinal.toFixed(2)} | taxaCartao=R$${taxaCartao.toFixed(2)} | pagamento=${metodoPagamento} | entrega=${tipoEntrega}`);
     this.imprimirService.imprimirComanda(negocioId, pedido.id).catch(() => {});
 
+    const linhaTaxa = taxaCartao > 0 ? `\nTaxa cartão: R$ ${taxaCartao.toFixed(2)}` : '';
     return {
-      texto: `✅ *Pedido Confirmado!* #${pedido.id.slice(0, 8).toUpperCase()}\nTotal: R$ ${total.toFixed(2)}\nPagamento: ${metodoPagamento}\n${endereco ? `Endereço: ${endereco}` : 'Retirada no local'}\n\nAgradecemos a preferência! 😊`,
+      texto: `✅ *Pedido Confirmado!* #${pedido.id.slice(0, 8).toUpperCase()}\nTotal: R$ ${totalFinal.toFixed(2)}${linhaTaxa}\nPagamento: ${metodoPagamento}\n${endereco ? `Endereço: ${endereco}` : 'Retirada no local'}\n\nAgradecemos a preferência! 😊`,
       sucesso: true,
     };
   }
@@ -457,7 +493,9 @@ export class ChatbotService {
 
     const base = config.systemPrompt || '';
     const estado = contexto.estado || 'INICIAL';
-    const pedidoResumo = contexto.pedidoRascunho ? this.resumirPedido(contexto.pedidoRascunho) : '';
+    const pedidoResumo = contexto.pedidoRascunho
+      ? this.resumirPedido(contexto.pedidoRascunho, (config as any).taxaCartaoFaixas)
+      : '';
 
     return `Você é ${negocio?.nome || 'um atendente virtual'}, atendente de WhatsApp. Fale português brasileiro, informal e simpático.
 ${base ? `Instruções do dono do negócio: ${base}` : ''}
