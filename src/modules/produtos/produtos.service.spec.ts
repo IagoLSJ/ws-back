@@ -557,4 +557,21 @@ describe('ProdutosService', () => {
       expect(mockRedis.del).toHaveBeenCalledWith('catalog:v2:n1:products');
     });
   });
+
+  describe('confirmUpload', () => {
+    it('cria a imagem como principal e invalida o cache da vitrine', async () => {
+      mockPrisma.produto.findFirst.mockResolvedValue({ ...baseProduto });
+      mockPrisma.imagemProduto.findFirst.mockResolvedValue(null);
+      mockPrisma.imagemProduto.create.mockResolvedValue({ id: 'img1', url: 'https://x/foto.jpg', principal: true });
+      (mockStorage as any).getPublicUrl = jest.fn().mockReturnValue('https://x/foto.jpg');
+
+      const imagem = await service.confirmUpload('n1', 'p1', 'produtos/n1/p1/foto.jpg');
+
+      expect(imagem.principal).toBe(true);
+      expect(mockPrisma.imagemProduto.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ principal: true }) }),
+      );
+      expect(mockRedis.del).toHaveBeenCalledWith('catalog:v2:n1:products');
+    });
+  });
 });

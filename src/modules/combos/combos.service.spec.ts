@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { CombosService } from './combos.service';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { RedisService } from '../../infra/cache/redis.service';
 
 const mockPrisma = {
   combo: {
@@ -22,6 +23,7 @@ describe('CombosService', () => {
       providers: [
         CombosService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: RedisService, useValue: { del: jest.fn().mockResolvedValue(1) } },
       ],
     }).compile();
 

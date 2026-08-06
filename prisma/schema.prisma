@@ -312,6 +312,7 @@ model Categoria {
 
   negocio    Negocio   @relation(fields: [negocioId], references: [id], onDelete: Cascade)
   produtos   Produto[]
+  combos     Combo[]
 
   @@unique([negocioId, nome])
   @@index([negocioId, ativo])
@@ -373,6 +374,7 @@ model ImagemProduto {
 model Combo {
   id          String   @id @default(uuid())
   negocioId   String
+  categoriaId String?
   nome        String
   descricao   String?
   preco       Decimal  @db.Decimal(10, 2)
@@ -383,8 +385,9 @@ model Combo {
   criadoEm    DateTime @default(now())
   atualizadoEm DateTime @updatedAt
 
-  negocio     Negocio    @relation(fields: [negocioId], references: [id], onDelete: Cascade)
-  itens       ComboItem[]
+  negocio   Negocio    @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  categoria Categoria? @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+  itens     ComboItem[]
 
   @@index([negocioId, ativo])
   @@map("combos")

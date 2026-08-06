@@ -383,7 +383,7 @@ export class ProdutosService {
       await this.prisma.imagemProduto.delete({ where: { id: existente.id } });
     }
 
-    return this.prisma.imagemProduto.create({
+        const imagem = await this.prisma.imagemProduto.create({
       data: {
         produtoId,
         url: this.storage.getPublicUrl(key),
@@ -391,10 +391,14 @@ export class ProdutosService {
         principal: true,
       },
     });
+
+    // Invalida o cache da vitrine/catálogo público para a foto aparecer
+    await this.invalidateCache(negocioId);
+
+    return imagem;
   }
 
-  async buscarPorCodigoBarras(negocioId: string, codigo: string) {
-    const produto = await this.prisma.produto.findFirst({
+  async buscarPorCodigoBarras(negocioId: string, codigo: string) {    const produto = await this.prisma.produto.findFirst({
       where: { negocioId, codigoBarras: codigo, status: 'ATIVO' },
       include: {
         categoria: true,
@@ -572,8 +576,9 @@ export class ProdutosService {
     for (const p of produtos) this.normalizeImagens(p);
     const combos = await this.prisma.combo.findMany({
       where: { negocioId: negocio.id, ativo: true },
-      orderBy: [{ destaque: 'desc' }, { ordem: 'asc' }],
+      orderBy: [{ destaque: 'desc' }, { ordem: 'asc' }, { criadoEm: 'desc' }],
       include: {
+        categoria: { select: { id: true, nome: true, ordem: true } },
         itens: { include: { produto: { select: { id: true, nome: true, preco: true } } } },
       },
     });

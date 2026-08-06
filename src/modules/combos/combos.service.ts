@@ -1,21 +1,32 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { RedisService } from '../../infra/cache/redis.service';
 import { CriarComboDto } from './dto/criar-combo.dto';
 import { AtualizarComboDto } from './dto/atualizar-combo.dto';
 
 @Injectable()
 export class CombosService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private redis: RedisService,
+  ) {}
+
+  private async invalidarVitrine(negocioId: string) {
+    try {
+      await this.redis.del(`catalog:v2:${negocioId}:products`);
+    } catch {
+      // cache indisponível — ok
+    }
+  }
 
   async criar(negocioId: string, dto: CriarComboDto) {
-    const { itens, ...data } = dto;
-    return this.prisma.combo.create({
+    const combo = await this.prisma.combo.create({
       data: {
-        ...data,
+        ...dto,
         negocioId,
         preco: dto.preco,
         itens: {
-          create: itens.map((i) => ({
+          create: dto.itens.map((i) => ({
             produtoId: i.produtoId,
             quantidade: i.quantidade ?? 1,
           })),
@@ -23,13 +34,18 @@ export class CombosService {
       },
       include: { itens: { include: { produto: { select: { id: true, nome: true, preco: true } } } } },
     });
+    await this.invalidarVitrine(negocioId);
+    return combo;
   }
 
   async listar(negocioId: string, apenasAtivos = false) {
     return this.prisma.combo.findMany({
       where: { negocioId, ...(apenasAtivos ? { ativo: true } : {}) },
       orderBy: [{ destaque: 'desc' }, { ordem: 'asc' }, { criadoEm: 'desc' }],
-      include: { itens: { include: { produto: { select: { id: true, nome: true, preco: true, imagens: { take: 1 } } } } } },
+      include: {
+        categoria: true,
+        itens: { include: { produto: { select: { id: true, nome: true, preco: true, imagens: { take: 1 } } } } },
+      },
     });
   }
 
@@ -52,16 +68,19 @@ export class CombosService {
         create: itens.map((i) => ({ produtoId: i.produtoId, quantidade: i.quantidade ?? 1 })),
       };
     }
-    return this.prisma.combo.update({
+    const combo = await this.prisma.combo.update({
       where: { id },
       data: updateData,
       include: { itens: { include: { produto: { select: { id: true, nome: true, preco: true } } } } },
     });
+    await this.invalidarVitrine(negocioId);
+    return combo;
   }
 
   async remover(negocioId: string, id: string) {
     await this.buscar(id, negocioId);
     await this.prisma.combo.delete({ where: { id } });
+    await this.invalidarVitrine(negocioId);
     return { removido: true };
   }
 

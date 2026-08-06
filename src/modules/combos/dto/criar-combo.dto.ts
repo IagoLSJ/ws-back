@@ -46,6 +46,11 @@ export class CriarComboDto {
   @IsBoolean()
   ativo?: boolean;
 
+  @ApiPropertyOptional({ description: 'Categoria do combo (mesmas categorias dos produtos)' })
+  @IsOptional()
+  @IsString()
+  categoriaId?: string;
+
   @ApiProperty({ type: [ComboItemDto] })
   @IsArray()
   @ValidateNested({ each: true })
