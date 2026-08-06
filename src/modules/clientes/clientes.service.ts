@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { CriarClienteDto } from './dto/criar-cliente.dto';
 import { AtualizarClienteDto } from './dto/atualizar-cliente.dto';
@@ -8,14 +8,44 @@ export class ClientesService {
   constructor(private prisma: PrismaService) {}
 
   async criar(dto: CriarClienteDto) {
-    const existente = await this.prisma.cliente.findUnique({
-      where: { cpfCnpj: dto.cpfCnpj },
-    });
-    if (existente) {
-      throw new ConflictException('CPF/CNPJ já cadastrado');
+    const cpf = dto.cpfCnpj?.trim() || undefined;
+    if (cpf) {
+      const existente = await this.prisma.cliente.findUnique({
+        where: { cpfCnpj: cpf },
+      });
+      if (existente) {
+        throw new ConflictException('CPF/CNPJ já cadastrado');
+      }
     }
 
-    return this.prisma.cliente.create({ data: dto });
+    const { valorDebitoInicial, negocioId, dataVencimento, ...dadosCliente } = dto;
+
+    return this.prisma.$transaction(async (tx) => {
+      const cliente = await tx.cliente.create({
+        data: {
+          ...dadosCliente,
+          cpfCnpj: cpf,
+          saldoDevedor: valorDebitoInicial ?? dadosCliente.saldoDevedor ?? 0,
+        },
+      });
+
+      if (valorDebitoInicial && valorDebitoInicial > 0) {
+        if (!negocioId) {
+          throw new BadRequestException('negocioId é obrigatório quando há dívida inicial');
+        }
+        await tx.contaReceber.create({
+          data: {
+            clienteId: cliente.id,
+            negocioId,
+            valorTotal: valorDebitoInicial,
+            dataVencimento: dataVencimento ? new Date(dataVencimento) : new Date(),
+            observacao: dadosCliente.observacao ?? 'Dívida migrada do sistema antigo',
+          },
+        });
+      }
+
+      return cliente;
+    });
   }
 
   async listar(query?: { search?: string; page?: number; limit?: number; comSaldo?: boolean }) {
@@ -68,16 +98,35 @@ export class ClientesService {
   async atualizar(id: string, dto: AtualizarClienteDto) {
     await this.buscarPorId(id);
 
-    if (dto.cpfCnpj) {
+    const cpf = dto.cpfCnpj?.trim() || undefined;
+    if (cpf) {
       const existente = await this.prisma.cliente.findUnique({
-        where: { cpfCnpj: dto.cpfCnpj },
+        where: { cpfCnpj: cpf },
       });
       if (existente && existente.id !== id) {
         throw new ConflictException('CPF/CNPJ já cadastrado para outro cliente');
       }
     }
 
-    return this.prisma.cliente.update({ where: { id }, data: dto });
+    return this.prisma.cliente.update({ where: { id }, data: { ...dto, cpfCnpj: cpf } });
+  }
+
+  async remover(id: string) {
+    const cliente = await this.prisma.cliente.findUnique({ where: { id } });
+    if (!cliente) throw new NotFoundException('Cliente não encontrado');
+
+    if (Number(cliente.saldoDevedor) > 0) {
+      throw new BadRequestException('Cliente ainda possui dívida em aberto. Receba o pagamento antes de remover.');
+    }
+
+    return this.prisma.$transaction([
+      this.prisma.contaReceber.deleteMany({ where: { clienteId: id } }),
+      this.prisma.cliente.delete({ where: { id } }),
+    ]).then(([contas, clienteRemovido]) => ({
+      removido: true,
+      cliente: clienteRemovido,
+      contasRemovidas: contas.count,
+    }));
   }
 
   async recalcularSaldos() {

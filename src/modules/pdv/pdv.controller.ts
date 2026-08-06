@@ -21,16 +21,23 @@ export class PdvController {
 
   @Get('produtos')
   @Roles(RoleNegocio.OPERADOR)
-  @ApiOperation({ summary: 'Listar todos os produtos de todos os negócios para o PDV' })
-  async produtos() {
-    return this.produtosService.findAllPDV();
+  @ApiOperation({ summary: 'Listar produtos do PDV (do próprio negócio ou da mesma cidade)' })
+  async produtos(
+    @Param('businessId') businessId: string,
+    @Request() req: any,
+  ) {
+    return this.produtosService.findAllPDV(businessId, req.user?.role);
   }
 
   @Get('produtos/busca/codigo/:codigo')
   @Roles(RoleNegocio.OPERADOR)
-  @ApiOperation({ summary: 'Buscar produto por código de barras em todos os negócios' })
-  async buscarPorCodigo(@Param('codigo') codigo: string) {
-    return this.produtosService.buscarPorCodigoBarrasPDV(codigo);
+  @ApiOperation({ summary: 'Buscar produto por código de barras no PDV (próprio negócio ou mesma cidade)' })
+  async buscarPorCodigo(
+    @Param('businessId') businessId: string,
+    @Param('codigo') codigo: string,
+    @Request() req: any,
+  ) {
+    return this.produtosService.buscarPorCodigoBarrasPDV(codigo, businessId, req.user?.role);
   }
 
   @Post('checkout')
@@ -40,6 +47,6 @@ export class PdvController {
     @Body() dto: FinalizarPdvDto,
     @Request() req: any,
   ) {
-    return this.pdvService.checkout(businessId, dto, req.user?.id);
+    return this.pdvService.checkout(businessId, dto, req.user?.id, req.user?.role);
   }
 }

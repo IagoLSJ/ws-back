@@ -22,4 +22,9 @@ export class CriarNegocioDto {
   @IsOptional()
   @IsEnum(TipoNegocio)
   tipo?: TipoNegocio;
+
+  @ApiPropertyOptional({ description: 'Cidade da filial (limita a visibilidade do catálogo no PDV)' })
+  @IsOptional()
+  @IsString()
+  cidade?: string;
 }

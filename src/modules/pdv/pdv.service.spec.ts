@@ -13,6 +13,9 @@ const mockPrisma = {
   produto: {
     findMany: jest.fn(),
   },
+  negocio: {
+    findUnique: jest.fn(),
+  },
   opcaoModificador: {
     findMany: jest.fn(),
   },
@@ -71,6 +74,8 @@ describe('PdvService', () => {
     valorDesconto: null,
     controlaEstoque: false,
     vendaPorPeso: false,
+    negocioId,
+    negocio: { id: negocioId, cidade: null },
   };
 
   const pedidoMock = {
@@ -123,6 +128,7 @@ describe('PdvService', () => {
     prisma.caixa.findFirst.mockResolvedValue(caixa);
     prisma.configuracaoNegocio.findUnique.mockResolvedValue(null);
     prisma.cliente.findUnique.mockResolvedValue(null);
+    prisma.negocio.findUnique.mockResolvedValue({ id: negocioId, cidade: null });
     caixaService.exigirCaixaAberto.mockResolvedValue(undefined);
   });
 

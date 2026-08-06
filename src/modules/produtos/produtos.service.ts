@@ -7,6 +7,7 @@ import { AtualizarProdutoDto } from './dto/atualizar-produto.dto';
 import { AjusteMassaProdutoDto, CampoAjusteMassa, OperacaoAjusteMassa, TipoAjusteMassa } from './dto/ajuste-massa-produto.dto';
 import { v4 as uuidv4 } from 'uuid';
 import { verificarAbertoEm } from '../../common/utils/horario';
+import { RoleNegocio } from '@prisma/client';
 
 @Injectable()
 export class ProdutosService {
@@ -161,8 +162,27 @@ export class ProdutosService {
     return produtos;
   }
 
-  async findAllPDV() {
-    const cacheKey = 'pdv:produtos:v1';
+  /**
+   * Filtro de localidade do PDV. SUPER_ADMIN não tem filtro (vê tudo);
+   * os demais vêem apenas produtos do próprio negócio ou de negócios da mesma cidade.
+   */
+  private async filtroLocalPDV(negocioId: string, role?: string) {
+    if (role === RoleNegocio.SUPER_ADMIN) return {};
+
+    const negocio = await this.prisma.negocio.findUnique({
+      where: { id: negocioId },
+      select: { cidade: true },
+    });
+
+    if (negocio?.cidade) {
+      return { OR: [{ negocioId }, { negocio: { cidade: negocio.cidade } }] };
+    }
+
+    return { negocioId };
+  }
+
+  async findAllPDV(negocioId?: string, role?: string) {
+    const cacheKey = negocioId ? `pdv:produtos:${negocioId}:v1` : 'pdv:produtos:v1';
     const cached = await this.redis.get(cacheKey);
     if (cached) {
       try {
@@ -172,14 +192,19 @@ export class ProdutosService {
       }
     }
 
+    const where: any = {
+      status: 'ATIVO',
+      OR: [
+        { controlaEstoque: false },
+        { estoqueItem: { quantidadeAtual: { gt: 0 } } },
+      ],
+    };
+    if (negocioId) {
+      where.AND = [await this.filtroLocalPDV(negocioId, role)];
+    }
+
     const produtos = await this.prisma.produto.findMany({
-      where: {
-        status: 'ATIVO',
-        OR: [
-          { controlaEstoque: false },
-          { estoqueItem: { quantidadeAtual: { gt: 0 } } },
-        ],
-      },
+      where,
       orderBy: [{ ordem: 'asc' }, { criadoEm: 'desc' }],
       include: {
         categoria: true,
@@ -412,8 +437,9 @@ export class ProdutosService {
     return produto;
   }
 
-  async buscarPorCodigoBarrasPDV(codigo: string) {
+  async buscarPorCodigoBarrasPDV(codigo: string, negocioId?: string, role?: string) {
     const candidatosToledo = this.parseToledoBarcode(codigo);
+    const local = negocioId ? await this.filtroLocalPDV(negocioId, role) : {};
 
     let produto: any;
 
@@ -421,7 +447,7 @@ export class ProdutosService {
     if (candidatosToledo.length) {
       for (const fmt of candidatosToledo) {
         produto = await this.prisma.produto.findFirst({
-          where: { plu: fmt.plu, status: 'ATIVO' },
+          where: { plu: fmt.plu, status: 'ATIVO', ...local },
           include: {
             categoria: true,
             negocio: { select: { id: true, nome: true } },
@@ -440,7 +466,7 @@ export class ProdutosService {
     if (!produto) {
       // 1. Busca por codigoBarras
       produto = await this.prisma.produto.findFirst({
-        where: { codigoBarras: codigo, status: 'ATIVO' },
+        where: { codigoBarras: codigo, status: 'ATIVO', ...local },
         include: {
           categoria: true,
           negocio: { select: { id: true, nome: true } },
@@ -455,7 +481,7 @@ export class ProdutosService {
         const pluNum = parseInt(codigo, 10);
         if (!isNaN(pluNum)) {
           produto = await this.prisma.produto.findFirst({
-            where: { plu: pluNum, status: 'ATIVO' },
+            where: { plu: pluNum, status: 'ATIVO', ...local },
             include: {
               categoria: true,
               negocio: { select: { id: true, nome: true } },

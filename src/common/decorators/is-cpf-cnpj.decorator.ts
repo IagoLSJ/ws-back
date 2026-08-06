@@ -10,6 +10,7 @@ import { validarCpfCnpj } from '../utils/documento';
 export class IsCpfOuCnpjConstraint implements ValidatorConstraintInterface {
   validate(value: unknown): boolean {
     if (typeof value !== 'string') return false;
+    if (!value.trim()) return true;
     return validarCpfCnpj(value);
   }
 

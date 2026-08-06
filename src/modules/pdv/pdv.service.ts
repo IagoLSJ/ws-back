@@ -7,7 +7,7 @@ import { CaixaService } from '../caixa/caixa.service';
 import { ContasReceberService } from '../contas-receber/contas-receber.service';
 import { FiscalService } from '../fiscal/fiscal.service';
 import { FinalizarPdvDto } from './dto/finalizar-pdv.dto';
-import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao } from '@prisma/client';
+import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao, RoleNegocio } from '@prisma/client';
 import { calcularPrecoFinal } from '../../common/utils/preco';
 import { converterPeso } from '../../common/utils/unidade';
 import { calcularTaxaCartao } from '../../common/utils/taxa-cartao';
@@ -35,7 +35,7 @@ export class PdvService {
     private redis: RedisService,
   ) {}
 
-  async checkout(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string) {
+  async checkout(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string, role?: string) {
 
     await this.caixaService.exigirCaixaAberto(negocioId, usuarioId);
 
@@ -48,10 +48,30 @@ export class PdvService {
         id: { in: dto.itens.map((i) => i.produtoId) },
         status: 'ATIVO',
       },
+      include: { negocio: { select: { id: true, cidade: true } } },
     });
 
     if (produtos.length !== dto.itens.length) {
       throw new BadRequestException('Alguns produtos não encontrados ou inativos');
+    }
+
+    // Valida que todos os produtos pertencem ao negócio da venda ou à mesma cidade
+    // (SUPER_ADMIN pode vender produtos de qualquer cidade)
+    if (role !== RoleNegocio.SUPER_ADMIN) {
+      const negocioVenda = await this.prisma.negocio.findUnique({
+        where: { id: negocioId },
+        select: { cidade: true },
+      });
+      for (const produto of produtos) {
+        const pertence =
+          produto.negocioId === negocioId ||
+          (negocioVenda?.cidade && produto.negocio.cidade === negocioVenda.cidade);
+        if (!pertence) {
+          throw new BadRequestException(
+            `Produto "${produto.nome}" pertence a outro negócio de outra cidade e não pode ser vendido aqui`,
+          );
+        }
+      }
     }
 
     // Verifica caixa aberto dentro da transação
@@ -185,7 +205,7 @@ export class PdvService {
         const produto = produtos.find((pr) => pr.id === item.produtoId);
         if (!produto?.controlaEstoque) continue;
         const ei = await tx.estoqueItem.findFirst({
-          where: { negocioId, produtoId: item.produtoId },
+          where: { negocioId: produto.negocioId, produtoId: item.produtoId },
         }) ?? await tx.estoqueItem.findFirst({
           where: { produtoId: item.produtoId },
         });

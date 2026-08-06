@@ -13,6 +13,7 @@ const mockPrisma = {
   },
   contaReceber: {
     findMany: jest.fn(),
+    create: jest.fn(),
   },
   $transaction: jest.fn(),
 };
@@ -33,6 +34,11 @@ describe('ClientesService', () => {
     prisma = module.get(PrismaService);
 
     jest.clearAllMocks();
+
+    mockPrisma.$transaction.mockImplementation(async (arg: any) => {
+      if (typeof arg === 'function') return arg(mockPrisma);
+      return Promise.all(arg);
+    });
   });
 
   const clienteBase = {
@@ -63,7 +69,9 @@ describe('ClientesService', () => {
 
       const result = await service.criar({ cpfCnpj: '123.456.789-09', nome: 'João da Silva' } as any);
 
-      expect(mockPrisma.cliente.create).toHaveBeenCalledWith({ data: { cpfCnpj: '123.456.789-09', nome: 'João da Silva' } });
+      expect(mockPrisma.cliente.create).toHaveBeenCalledWith({
+        data: { cpfCnpj: '123.456.789-09', nome: 'João da Silva', saldoDevedor: 0 },
+      });
       expect(result.nome).toBe('João da Silva');
     });
   });

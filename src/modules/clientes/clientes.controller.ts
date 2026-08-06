@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ClientesService } from './clientes.service';
 import { CriarClienteDto } from './dto/criar-cliente.dto';
@@ -46,6 +46,13 @@ export class ClientesController {
   @ApiOperation({ summary: 'Atualizar cliente' })
   atualizar(@Param('id') id: string, @Body() dto: AtualizarClienteDto) {
     return this.service.atualizar(id, dto);
+  }
+
+  @Delete(':id')
+  @Roles(RoleNegocio.GERENTE, RoleNegocio.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Remover cliente (apenas se não houver dívida em aberto)' })
+  remover(@Param('id') id: string) {
+    return this.service.remover(id);
   }
 
   @Post('recalcular-saldos')

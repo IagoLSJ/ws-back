@@ -34,6 +34,7 @@ export class NegociosService {
         slug,
         descricao: dto.descricao,
         tipo: dto.tipo,
+        cidade: dto.cidade,
         configuracoes: {
           create: {
             controleEstoqueAtivo: true,
