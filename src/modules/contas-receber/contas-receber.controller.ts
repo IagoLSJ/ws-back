@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ContasReceberService } from './contas-receber.service';
 import { BaixaContaReceberDto } from './dto/baixa-conta-receber.dto';
+import { AtualizarContaReceberDto } from './dto/atualizar-conta-receber.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -40,6 +41,17 @@ export class ContasReceberController {
   @ApiOperation({ summary: 'Buscar conta a receber' })
   buscarPorId(@Param('businessId') negocioId: string, @Param('id') id: string) {
     return this.service.buscarPorId(negocioId, id);
+  }
+
+  @Patch(':id')
+  @Roles(RoleNegocio.GERENTE, RoleNegocio.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Editar valor, vencimento ou observação da conta a receber' })
+  atualizar(
+    @Param('businessId') negocioId: string,
+    @Param('id') id: string,
+    @Body() dto: AtualizarContaReceberDto,
+  ) {
+    return this.service.atualizar(negocioId, id, dto);
   }
 
   @Post(':id/baixa')

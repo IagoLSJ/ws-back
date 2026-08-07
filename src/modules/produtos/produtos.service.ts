@@ -27,9 +27,13 @@ export class ProdutosService {
     await this.redis.del(this.cacheKey(negocioId));
   }
 
-  private async invalidatePDVCache() {
+  private async invalidatePDVCache(negocioId?: string) {
     try {
+      // Invalida o cache global (legado) e o do negócio (ou de toda a cidade,
+      // já que o catálogo do PDV é compartilhado por cidade)
+      const padrao = negocioId ? `pdv:produtos:${negocioId}:v1` : 'pdv:produtos:*';
       await this.redis.del('pdv:produtos:v1');
+      await this.redis.del(padrao);
     } catch {
       // cache indisponível — ok
     }
@@ -125,7 +129,7 @@ export class ProdutosService {
     });
 
     await this.invalidateCache(negocioId);
-    await this.invalidatePDVCache();
+    await this.invalidatePDVCache(negocioId);
 
     if (produto.controlaEstoque) {
       const config = await this.prisma.configuracaoNegocio.findUnique({
@@ -339,7 +343,7 @@ export class ProdutosService {
     }
 
     await this.invalidateCache(negocioId);
-    await this.invalidatePDVCache();
+    await this.invalidatePDVCache(negocioId);
     return produto;
   }
 
@@ -371,7 +375,7 @@ export class ProdutosService {
     });
 
     await this.invalidateCache(negocioId);
-    await this.invalidatePDVCache();
+    await this.invalidatePDVCache(negocioId);
   }
 
   async requestUploadUrl(negocioId: string, produtoId: string, fileName: string, fileSize?: number) {
@@ -700,7 +704,7 @@ export class ProdutosService {
 
     if (resumo.length) {
       await this.invalidateCache(negocioId);
-      await this.invalidatePDVCache();
+      await this.invalidatePDVCache(negocioId);
     }
 
     return {

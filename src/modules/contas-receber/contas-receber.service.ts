@@ -116,6 +116,61 @@ export class ContasReceberService {
     });
   }
 
+  async atualizar(
+    negocioId: string,
+    id: string,
+    dto: { valorTotal?: number; dataVencimento?: string; observacao?: string },
+  ) {
+    const conta = await this.prisma.contaReceber.findFirst({
+      where: { id, negocioId },
+    });
+    if (!conta) throw new NotFoundException('Conta a receber não encontrada');
+
+    const valorAtual = Number(conta.valorTotal);
+    const novoValor = dto.valorTotal !== undefined ? dto.valorTotal : valorAtual;
+    const venc = dto.dataVencimento ? new Date(dto.dataVencimento) : conta.dataVencimento;
+
+    const valorPago = Number(conta.valorPago);
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+
+    let status = conta.status;
+    if (valorPago >= novoValor) {
+      status = ContaReceberStatus.PAGO;
+    } else if (venc < hoje) {
+      status = ContaReceberStatus.ATRASADO;
+    } else if (valorPago > 0) {
+      status = ContaReceberStatus.PARCIAL;
+    } else {
+      status = ContaReceberStatus.PENDENTE;
+    }
+
+    const data: any = { status };
+    if (dto.valorTotal !== undefined) data.valorTotal = dto.valorTotal;
+    if (dto.dataVencimento) data.dataVencimento = venc;
+    if (dto.observacao !== undefined) data.observacao = dto.observacao;
+
+    // Ajusta o saldoDevedor do cliente pela diferença do valor total
+    const saldoNovo = dto.valorTotal !== undefined ? novoValor - valorAtual : 0;
+
+    return this.prisma.$transaction([
+      this.prisma.contaReceber.update({ where: { id }, data }),
+      ...(saldoNovo !== 0
+        ? [this.prisma.cliente.update({
+            where: { id: conta.clienteId },
+            data: { saldoDevedor: { increment: saldoNovo } },
+          })]
+        : []),
+    ]).then(([contaAtualizada]) => {
+      return this.prisma.contaReceber.findUnique({
+        where: { id: contaAtualizada.id },
+        include: {
+          cliente: { select: { id: true, nome: true, cpfCnpj: true } },
+        },
+      });
+    });
+  }
+
   async buscarPorId(negocioId: string, id: string) {
     const conta = await this.prisma.contaReceber.findFirst({
       where: { id, negocioId },
