@@ -84,17 +84,19 @@ export class PdvService {
 
     const itensData = await Promise.all(dto.itens.map(async (item) => {
       const produto = produtos.find((p) => p.id === item.produtoId)!;
-      const quantidade = item.quantidade ?? 1;
-      if (produto.vendaPorPeso) {
+      // Etiqueta da balança (código Toledo) já traz o valor embutido
+      const precoEtiqueta = item.precoUnitario;
+      const quantidade = precoEtiqueta !== undefined ? 1 : (item.quantidade ?? 1);
+      if (precoEtiqueta === undefined && produto.vendaPorPeso) {
         if (!Number.isFinite(quantidade) || quantidade < 0.001) {
           throw new BadRequestException(`Peso inválido para "${produto.nome}"`);
         }
-      } else {
+      } else if (precoEtiqueta === undefined) {
         if (!Number.isInteger(quantidade) || quantidade < 1) {
           throw new BadRequestException(`Quantidade inválida para "${produto.nome}"`);
         }
       }
-      let precoUnitario = calcularPrecoFinal(produto);
+      let precoUnitario = precoEtiqueta !== undefined ? precoEtiqueta : calcularPrecoFinal(produto);
 
       let modificadores: any[] = [];
       if (item.opcoesSelecionadas?.length) {

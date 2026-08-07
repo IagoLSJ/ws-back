@@ -150,9 +150,13 @@ export class ProdutosService {
     return produto;
   }
 
-  async findAll(negocioId: string) {
+  async findAll(negocioId: string, options?: { apenasComPlu?: boolean }) {
+    const where: any = { negocioId };
+    if (options?.apenasComPlu) {
+      where.plu = { not: null };
+    }
     const produtos = await this.prisma.produto.findMany({
-      where: { negocioId },
+      where,
       orderBy: [{ ordem: 'asc' }, { criadoEm: 'desc' }],
       include: {
         categoria: true,
@@ -461,7 +465,7 @@ export class ProdutosService {
           },
         });
         if (produto) {
-          produto = { ...produto, preco: fmt.preco };
+          produto = { ...produto, preco: fmt.preco, precoPorKg: Number(produto.preco), etiquetaPreco: true };
           break;
         }
       }

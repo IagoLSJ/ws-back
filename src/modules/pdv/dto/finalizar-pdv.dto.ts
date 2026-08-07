@@ -36,6 +36,12 @@ class ItemPdvDto {
   @Min(0.001)
   quantidade?: number;
 
+  @ApiPropertyOptional({ description: 'Preço fixo do item (ex.: etiqueta da balança com valor embutido)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  precoUnitario?: number;
+
   @ApiPropertyOptional()
   @IsOptional()
   @ValidateNested()

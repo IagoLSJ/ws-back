@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ProdutosService } from './produtos.service';
 import { CriarProdutoDto } from './dto/criar-produto.dto';
@@ -27,8 +27,8 @@ export class ProdutosController {
   @Get()
   @Roles(RoleNegocio.VISUALIZADOR)
   @ApiOperation({ summary: 'Listar produtos' })
-  findAll(@Param('businessId') negocioId: string) {
-    return this.service.findAll(negocioId);
+  findAll(@Param('businessId') negocioId: string, @Query('apenasComPlu') apenasComPlu?: string) {
+    return this.service.findAll(negocioId, { apenasComPlu: apenasComPlu === 'true' });
   }
 
   @Get('busca/codigo/:codigo')

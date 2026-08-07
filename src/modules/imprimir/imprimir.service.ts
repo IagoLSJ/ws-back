@@ -3,7 +3,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { gerarComandaHtml } from './templates/comanda.template';
-import { gerarCupomHtml } from './templates/cupom.template';
+import { gerarCupomHtml, DadosCupom } from './templates/cupom.template';
 import { CriarImpressoraDto } from './dto/criar-impressora.dto';
 import { AtualizarImpressoraDto } from './dto/atualizar-impressora.dto';
 
@@ -133,9 +133,10 @@ export class ImprimirService {
     const taxaFrete = Number(pedido.taxaFrete) || 0;
     const config = pedido.negocio.configuracoes;
     const endEmitente = config?.endereco ? formatarEndereco(config.endereco as any) : undefined;
+    const logoUrl = (pedido.negocio as any).logoUrl || undefined;
 
     const statusTraduzido = traduzirStatus(pedido.status);
-    const html = gerarCupomHtml({
+    const dadosCupom = {
       negocioNome: pedido.negocio.nome,
       razaoSocial: config?.razaoSocial || undefined,
       cnpj: config?.cnpj || undefined,
@@ -168,11 +169,13 @@ export class ImprimirService {
       chaveAcesso: pedido.chaveAcesso || undefined,
       qrCodeUrl: pedido.qrCodeUrl || undefined,
       tributosAproximados: pedido.tributosAproximados ? Number(pedido.tributosAproximados) : undefined,
-    });
+      logoUrl,
+    };
+    const html = gerarCupomHtml(dadosCupom);
 
     let enviadoParaRede = false;
     if (impressoraId) {
-      enviadoParaRede = await this.enviarParaImpressora(impressoraId, html);
+      enviadoParaRede = await this.enviarParaImpressora(impressoraId, html, dadosCupom);
     } else {
       // Se tem operador logado, tenta achar a impressora dele primeiro
       if (usuarioId) {
@@ -180,7 +183,7 @@ export class ImprimirService {
           where: { negocioId, ativo: true, tipoUso: 'OPERADOR', operadorId: usuarioId },
         });
         if (impDoOperador?.conexao === 'REDE' && impDoOperador.enderecoIp) {
-          enviadoParaRede = await this.enviarTcp(impDoOperador.enderecoIp, impDoOperador.porta || 9100, html);
+          enviadoParaRede = await this.enviarTcpCupom(impDoOperador.enderecoIp, impDoOperador.porta || 9100, dadosCupom, impDoOperador.papelLargura || 80);
         }
       }
       // Fallback: imprime em qualquer impressora OPERADOR (se a do operador falhou ou não existe)
@@ -188,7 +191,7 @@ export class ImprimirService {
         const impressoras = await this.prisma.impressoraConfig.findMany({ where: { negocioId, ativo: true, conexao: 'REDE', tipoUso: 'OPERADOR' } });
         for (const imp of impressoras) {
           if (imp.enderecoIp) {
-            const ok = await this.enviarTcp(imp.enderecoIp, imp.porta || 9100, html);
+            const ok = await this.enviarTcpCupom(imp.enderecoIp, imp.porta || 9100, dadosCupom, imp.papelLargura || 80);
             if (ok) { enviadoParaRede = true; break; }
           }
         }
@@ -218,14 +221,22 @@ export class ImprimirService {
     return this.htmlToEscPos(html);
   }
 
-  private async enviarParaImpressora(impressoraId: string, html: string): Promise<boolean> {
+  private async enviarParaImpressora(impressoraId: string, html: string, dadosCupom?: DadosCupom): Promise<boolean> {
     const imp = await this.prisma.impressoraConfig.findUnique({ where: { id: impressoraId } });
     if (!imp || !imp.ativo) return false;
 
     if (imp.conexao === 'REDE' && imp.enderecoIp) {
+      if (dadosCupom) {
+        return this.enviarTcpCupom(imp.enderecoIp, imp.porta || 9100, dadosCupom, imp.papelLargura || 80);
+      }
       return this.enviarTcp(imp.enderecoIp, imp.porta || 9100, html);
     }
     return false;
+  }
+
+  private async enviarTcpCupom(host: string, port: number, dados: DadosCupom, papelLargura: number): Promise<boolean> {
+    const html = gerarCupomHtml({ ...dados, papelLargura });
+    return this.enviarTcp(host, port, html);
   }
 
   private async enviarTcp(host: string, port: number, html: string): Promise<boolean> {
@@ -333,6 +344,7 @@ export class ImprimirService {
       CARTAO_CREDITO: 'Cartão Crédito',
       CARTAO_DEBITO: 'Cartão Débito',
       PIX: 'Pix',
+      CREDIARIO: 'A Prazo',
       OUTRO: 'Outro',
     };
     return mapa[metodo] || metodo;
