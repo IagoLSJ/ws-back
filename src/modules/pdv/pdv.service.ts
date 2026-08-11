@@ -214,6 +214,8 @@ export class PdvService {
     const sessionId = `pdv-${negocioId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
     // TRANSAÇÃO ÚNICA: pedido + estoque + caixa
+    // Timeout elevado (15s) porque vendas com muitos itens geram várias queries
+    // sequenciais de estoque; o padrão do Prisma (5s) estoura em produção.
     const pedido = await this.prisma.$transaction(async (tx) => {
       const p = await tx.pedido.create({
         data: {
@@ -252,14 +254,28 @@ export class PdvService {
       });
 
       // Movimentação de estoque dentro da transação
+      // Busca todos os estoques em uma única query (reduz round-trips no loop)
+      const produtosComEstoque = itensData.filter((i) => {
+        const pr = produtos.find((p) => p.id === i.produtoId);
+        return pr?.controlaEstoque;
+      });
+      let estoquePorProduto = new Map<string, any>();
+      if (produtosComEstoque.length) {
+        const estoques = await tx.estoqueItem.findMany({
+          where: { produtoId: { in: produtosComEstoque.map((i) => i.produtoId) } },
+        });
+        for (const e of estoques) {
+          if (!e.produtoId) continue;
+          if (!estoquePorProduto.has(e.produtoId) || e.negocioId === negocioId) {
+            estoquePorProduto.set(e.produtoId, e);
+          }
+        }
+      }
+
       for (const item of p.itens) {
         const produto = produtos.find((pr) => pr.id === item.produtoId);
         if (!produto?.controlaEstoque) continue;
-        const ei = await tx.estoqueItem.findFirst({
-          where: { negocioId: produto.negocioId, produtoId: item.produtoId },
-        }) ?? await tx.estoqueItem.findFirst({
-          where: { produtoId: item.produtoId },
-        });
+        const ei = estoquePorProduto.get(item.produtoId);
         // Venda por peso: a quantidade é informada em kg e convertida para a unidade do estoque
         const qtd = produto.vendaPorPeso
           ? converterPeso(Number(item.quantidade), 'kg', ei?.unidade)
@@ -320,7 +336,7 @@ export class PdvService {
       }
 
       return p;
-    });
+    }, { timeout: 15000 });
 
     // Invalida cache da vitrine após a venda (estoque pode ter zerado)
     await this.redis.del(`catalog:v2:${negocioId}:products`).catch(() => {});

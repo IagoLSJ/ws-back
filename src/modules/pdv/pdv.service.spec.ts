@@ -112,7 +112,7 @@ describe('PdvService', () => {
 
     tx = {
       pedido: { create: jest.fn() },
-      estoqueItem: { findFirst: jest.fn(), update: jest.fn() },
+      estoqueItem: { findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
       movimentacaoEstoque: { create: jest.fn() },
       caixaMovimento: { create: jest.fn() },
       contaReceber: { create: jest.fn() },
@@ -176,13 +176,13 @@ describe('PdvService', () => {
       const produto = { ...produtoBase, controlaEstoque: true };
       prisma.produto.findMany.mockResolvedValue([produto]);
       tx.pedido.create.mockResolvedValue(pedidoMock);
-      tx.estoqueItem.findFirst.mockResolvedValue({
+      tx.estoqueItem.findMany.mockResolvedValue([{
         id: 'ei1',
         negocioId,
         produtoId: 'p1',
         unidade: 'un',
         quantidadeAtual: 100,
-      });
+      }]);
       tx.estoqueItem.update.mockResolvedValue({});
       tx.movimentacaoEstoque.create.mockResolvedValue({});
       tx.caixaMovimento.create.mockResolvedValue({});
@@ -224,13 +224,13 @@ describe('PdvService', () => {
         total: 18,
         itens: [{ produtoId: 'p1', produtoNome: 'Produto', precoUnitario: 12, quantidade: 1.5 }],
       });
-      tx.estoqueItem.findFirst.mockResolvedValue({
+      tx.estoqueItem.findMany.mockResolvedValue([{
         id: 'ei1',
         negocioId,
         produtoId: 'p1',
         unidade: 'g',
         quantidadeAtual: 5000,
-      });
+      }]);
       tx.estoqueItem.update.mockResolvedValue({});
       tx.movimentacaoEstoque.create.mockResolvedValue({});
       tx.caixaMovimento.create.mockResolvedValue({});
@@ -254,13 +254,13 @@ describe('PdvService', () => {
         total: 18,
         itens: [{ produtoId: 'p1', produtoNome: 'Produto', precoUnitario: 12, quantidade: 1.5 }],
       });
-      tx.estoqueItem.findFirst.mockResolvedValue({
+      tx.estoqueItem.findMany.mockResolvedValue([{
         id: 'ei1',
         negocioId,
         produtoId: 'p1',
         unidade: 'kg',
         quantidadeAtual: 10,
-      });
+      }]);
       tx.estoqueItem.update.mockResolvedValue({});
       tx.movimentacaoEstoque.create.mockResolvedValue({});
       tx.caixaMovimento.create.mockResolvedValue({});
@@ -279,15 +279,13 @@ describe('PdvService', () => {
       const produto = { ...produtoBase, controlaEstoque: true };
       prisma.produto.findMany.mockResolvedValue([produto]);
       tx.pedido.create.mockResolvedValue(pedidoMock);
-      tx.estoqueItem.findFirst
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({
-          id: 'ei2',
-          negocioId: 'n2',
-          produtoId: 'p1',
-          unidade: 'un',
-          quantidadeAtual: 100,
-        });
+      tx.estoqueItem.findMany.mockResolvedValue([{
+        id: 'ei2',
+        negocioId: 'n2',
+        produtoId: 'p1',
+        unidade: 'un',
+        quantidadeAtual: 100,
+      }]);
       tx.estoqueItem.update.mockResolvedValue({});
       tx.movimentacaoEstoque.create.mockResolvedValue({});
       tx.caixaMovimento.create.mockResolvedValue({});
@@ -305,7 +303,7 @@ describe('PdvService', () => {
       const produto = { ...produtoBase, controlaEstoque: true };
       prisma.produto.findMany.mockResolvedValue([produto]);
       tx.pedido.create.mockResolvedValue(pedidoMock);
-      tx.estoqueItem.findFirst.mockResolvedValue(null);
+      tx.estoqueItem.findMany.mockResolvedValue([]);
 
       await expect(service.checkout(negocioId, dtoBase({ itens: [{ produtoId: 'p1', quantidade: 2 }] }))).rejects.toThrow(
         'Estoque insuficiente',
@@ -316,13 +314,13 @@ describe('PdvService', () => {
       const produto = { ...produtoBase, controlaEstoque: true };
       prisma.produto.findMany.mockResolvedValue([produto]);
       tx.pedido.create.mockResolvedValue(pedidoMock);
-      tx.estoqueItem.findFirst.mockResolvedValue({
+      tx.estoqueItem.findMany.mockResolvedValue([{
         id: 'ei1',
         negocioId,
         produtoId: 'p1',
         unidade: 'un',
         quantidadeAtual: 1,
-      });
+      }]);
 
       await expect(service.checkout(negocioId, dtoBase({ itens: [{ produtoId: 'p1', quantidade: 2 }] }))).rejects.toThrow(
         'Estoque insuficiente',
