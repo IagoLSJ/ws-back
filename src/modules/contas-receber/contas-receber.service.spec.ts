@@ -40,6 +40,53 @@ describe('ContasReceberService', () => {
     });
   });
 
+  describe('criarVale', () => {
+    const tx = {
+      contaReceber: { create: jest.fn() },
+      cliente: { update: jest.fn() },
+    };
+    const cliente = { id: 'cl1', nome: 'João', cpfCnpj: '123', saldoDevedor: 0, limiteCredito: 500 };
+
+    beforeEach(() => {
+      mockPrisma.cliente.findUnique.mockResolvedValue(cliente);
+      mockPrisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      tx.contaReceber.create.mockResolvedValue({ id: 'v1', cliente: cliente });
+    });
+
+    it('lança 404 se cliente não existe', async () => {
+      mockPrisma.cliente.findUnique.mockResolvedValue(null);
+      await expect(service.criarVale({ clienteId: 'x', negocioId: 'n1', valorTotal: 50, dataVencimento: '2030-01-01' }))
+        .rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('lança BadRequest se excede o limite de crédito', async () => {
+      mockPrisma.cliente.findUnique.mockResolvedValue({ ...cliente, saldoDevedor: 480 });
+      await expect(service.criarVale({ clienteId: 'cl1', negocioId: 'n1', valorTotal: 50, dataVencimento: '2030-01-01' }))
+        .rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('cria conta sem pedido e incrementa saldoDevedor', async () => {
+      const result = await service.criarVale({ clienteId: 'cl1', negocioId: 'n1', valorTotal: 50, dataVencimento: '2030-01-01', observacao: 'Adiantamento' });
+
+      expect(tx.contaReceber.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            clienteId: 'cl1',
+            negocioId: 'n1',
+            valorTotal: 50,
+            observacao: 'Adiantamento',
+            status: 'PENDENTE',
+          }),
+        }),
+      );
+      expect(tx.cliente.update).toHaveBeenCalledWith({
+        where: { id: 'cl1' },
+        data: { saldoDevedor: { increment: 50 } },
+      });
+      expect(result.id).toBe('v1');
+    });
+  });
+
   describe('listar', () => {
     it('retorna paginação', async () => {
       mockPrisma.$transaction.mockResolvedValue([[{ id: 'c1' }], 1]);

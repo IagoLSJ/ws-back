@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ContasReceberService } from './contas-receber.service';
+import { CriarValeContaReceberDto } from './dto/criar-vale-conta-receber.dto';
 import { BaixaContaReceberDto } from './dto/baixa-conta-receber.dto';
 import { AtualizarContaReceberDto } from './dto/atualizar-conta-receber.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -41,6 +42,16 @@ export class ContasReceberController {
   @ApiOperation({ summary: 'Buscar conta a receber' })
   buscarPorId(@Param('businessId') negocioId: string, @Param('id') id: string) {
     return this.service.buscarPorId(negocioId, id);
+  }
+
+  @Post('vale')
+  @Roles(RoleNegocio.GERENTE, RoleNegocio.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Lançar vale/adiantamento avulso (sem pedido), atrelado a um cliente' })
+  criarVale(
+    @Param('businessId') negocioId: string,
+    @Body() dto: CriarValeContaReceberDto,
+  ) {
+    return this.service.criarVale({ ...dto, negocioId });
   }
 
   @Patch(':id')

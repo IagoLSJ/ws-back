@@ -6,6 +6,47 @@ import { ContaReceberStatus } from '@prisma/client';
 export class ContasReceberService {
   constructor(private prisma: PrismaService) {}
 
+  /**
+   * Vale/adiantamento avulso: conta a receber sem pedido/produto,
+   * atrelada a um cliente (ex.: adiantamento de funcionário, PIX antecipado).
+   */
+  async criarVale(data: { clienteId: string; negocioId: string; valorTotal: number; dataVencimento: string; observacao?: string }) {
+    const cliente = await this.prisma.cliente.findUnique({ where: { id: data.clienteId } });
+    if (!cliente) throw new NotFoundException('Cliente não encontrado');
+
+    if (Number(cliente.saldoDevedor) + data.valorTotal > Number(cliente.limiteCredito)) {
+      throw new BadRequestException(
+        `Cliente não tem limite de crédito suficiente. Saldo devedor atual: R$ ${Number(cliente.saldoDevedor).toFixed(2)}, Limite: R$ ${Number(cliente.limiteCredito).toFixed(2)}`,
+      );
+    }
+
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    const venc = new Date(data.dataVencimento);
+    const status = venc < hoje ? ContaReceberStatus.ATRASADO : ContaReceberStatus.PENDENTE;
+
+    return this.prisma.$transaction(async (tx) => {
+      const conta = await tx.contaReceber.create({
+        data: {
+          clienteId: data.clienteId,
+          negocioId: data.negocioId,
+          valorTotal: data.valorTotal,
+          dataVencimento: venc,
+          status,
+          observacao: data.observacao,
+        },
+        include: { cliente: { select: { id: true, nome: true, cpfCnpj: true } } },
+      });
+
+      await tx.cliente.update({
+        where: { id: data.clienteId },
+        data: { saldoDevedor: { increment: data.valorTotal } },
+      });
+
+      return conta;
+    });
+  }
+
   async criar(data: {
     clienteId: string;
     negocioId: string;
