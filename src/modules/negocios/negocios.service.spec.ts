@@ -25,6 +25,9 @@ const mockPrisma = {
     create: jest.fn(),
     update: jest.fn(),
     delete: jest.fn(),
+    updateMany: jest.fn(),
+    deleteMany: jest.fn(),
+    findUnique: jest.fn(),
   },
   estoqueItem: {
     updateMany: jest.fn(),
@@ -249,6 +252,51 @@ describe('NegociosService', () => {
         data: { negocioId: 'n1', bairro: 'Centro', taxa: 10 },
       });
       expect(result).toEqual(taxa);
+    });
+  });
+
+  describe('atualizarTaxaFreteBairro', () => {
+    it('deve atualizar apenas taxa do próprio negócio', async () => {
+      const taxa = { id: 't1', negocioId: 'n1', bairro: 'Centro', taxa: 15 };
+      mockPrisma.taxaFreteBairro.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.taxaFreteBairro.findUnique.mockResolvedValue(taxa);
+
+      const result = await service.atualizarTaxaFreteBairro('n1', 't1', { taxa: 15 });
+
+      expect(mockPrisma.taxaFreteBairro.updateMany).toHaveBeenCalledWith({
+        where: { id: 't1', negocioId: 'n1' },
+        data: { taxa: 15 },
+      });
+      expect(result).toEqual(taxa);
+    });
+
+    it('deve lançar NotFound quando a taxa não pertence ao negócio', async () => {
+      mockPrisma.taxaFreteBairro.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.atualizarTaxaFreteBairro('n1', 't1', { taxa: 15 })).rejects.toThrow(
+        'Taxa de frete não encontrada',
+      );
+    });
+  });
+
+  describe('removerTaxaFreteBairro', () => {
+    it('deve remover apenas taxa do próprio negócio', async () => {
+      mockPrisma.taxaFreteBairro.deleteMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.removerTaxaFreteBairro('n1', 't1');
+
+      expect(mockPrisma.taxaFreteBairro.deleteMany).toHaveBeenCalledWith({
+        where: { id: 't1', negocioId: 'n1' },
+      });
+      expect(result).toEqual({ removida: true });
+    });
+
+    it('deve lançar NotFound quando a taxa não pertence ao negócio', async () => {
+      mockPrisma.taxaFreteBairro.deleteMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.removerTaxaFreteBairro('n1', 't1')).rejects.toThrow(
+        'Taxa de frete não encontrada',
+      );
     });
   });
 });

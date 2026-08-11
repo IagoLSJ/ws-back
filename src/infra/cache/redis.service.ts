@@ -43,7 +43,8 @@ export class RedisService implements OnModuleDestroy {
         : seconds
           ? await this.client.set(key, value, 'EX', seconds)
           : await this.client.set(key, value);
-      return res === 'OK' || res === null;
+      // NX: ioredis retorna 'OK' quando gravou e null quando a chave já existe
+      return res === 'OK';
     }
 
     if (nx && this.mem.has(key)) return false;

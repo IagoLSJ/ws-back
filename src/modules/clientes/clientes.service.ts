@@ -48,12 +48,15 @@ export class ClientesService {
     });
   }
 
-  async listar(query?: { search?: string; page?: number; limit?: number; comSaldo?: boolean }) {
-    const page = query?.page ?? 1;
-    const limit = query?.limit ?? 50;
+  async listar(query?: { search?: string; page?: number; limit?: number; comSaldo?: boolean; comSaldoPositivo?: boolean }) {
+    const page = Math.max(1, query?.page && Number.isFinite(query.page) ? query.page : 1);
+    const limit = Math.min(200, Math.max(1, query?.limit && Number.isFinite(query.limit) ? query.limit : 50));
     const skip = (page - 1) * limit;
 
     const where: any = {};
+    if (query?.comSaldoPositivo) {
+      where.saldoDevedor = { gt: 0 };
+    }
     if (query?.search) {
       const termo = query.search;
       where.OR = [
@@ -88,6 +91,24 @@ export class ClientesService {
         contasReceber: {
           orderBy: { criadoEm: 'desc' },
           take: 50,
+          include: {
+            pedido: {
+              select: {
+                id: true,
+                total: true,
+                criadoEm: true,
+                observacao: true,
+                itens: {
+                  select: {
+                    produtoNome: true,
+                    quantidade: true,
+                    precoUnitario: true,
+                    modificadores: true,
+                  },
+                },
+              },
+            },
+          },
         },
       },
     });

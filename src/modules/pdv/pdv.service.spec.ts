@@ -88,7 +88,7 @@ describe('PdvService', () => {
 
   const dtoBase = (overrides: any = {}) => ({
     itens: [{ produtoId: 'p1', quantidade: 1 }],
-    pagamento: { metodo: 'PIX', valorPago: 10 },
+    pagamento: { metodo: 'PIX' },
     ...overrides,
   });
 
@@ -559,6 +559,77 @@ describe('PdvService', () => {
       const data = tx.pedido.create.mock.calls[0][0].data;
       expect(data.total).toBe(6.66);
       expect(data.troco).toBe(3.34);
+    });
+  });
+
+  describe('checkout - validação do valor PIX', () => {
+    it('deve lançar BadRequest quando valorPago do PIX não confere com o total recalculado', async () => {
+      prisma.produto.findMany.mockResolvedValue([produtoBase]);
+
+      await expect(
+        service.checkout(
+          negocioId,
+          dtoBase({
+            itens: [{ produtoId: 'p1', quantidade: 2 }],
+            pagamento: { metodo: 'PIX', valorPago: 10 },
+          }),
+        ),
+      ).rejects.toThrow('Valor do PIX');
+    });
+
+    it('não deve lançar quando valorPago do PIX confere com o total recalculado', async () => {
+      prisma.produto.findMany.mockResolvedValue([produtoBase]);
+      tx.pedido.create.mockResolvedValue(pedidoMock);
+      tx.caixaMovimento.create.mockResolvedValue({});
+
+      await expect(
+        service.checkout(
+          negocioId,
+          dtoBase({
+            itens: [{ produtoId: 'p1', quantidade: 2 }],
+            pagamento: { metodo: 'PIX', valorPago: 20 },
+          }),
+        ),
+      ).resolves.toBeDefined();
+      expect(tx.pedido.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ total: 20 }) }),
+      );
+    });
+  });
+
+  describe('preview', () => {
+    it('deve retornar o total autoritativo sem criar pedido', async () => {
+      prisma.produto.findMany.mockResolvedValue([{ ...produtoBase, preco: 3.333 }]);
+
+      const result = await service.preview(
+        negocioId,
+        dtoBase({
+          itens: [{ produtoId: 'p1', quantidade: 2 }],
+        }),
+        usuarioId,
+      );
+
+      expect(result).toEqual({ total: 6.66, taxaFrete: 0, taxaCartao: 0 });
+      expect(tx.pedido.create).not.toHaveBeenCalled();
+    });
+
+    it('deve somar taxa de cartão no preview para cartão de crédito', async () => {
+      prisma.produto.findMany.mockResolvedValue([{ ...produtoBase, preco: 50 }]);
+      prisma.configuracaoNegocio.findUnique.mockResolvedValue({
+        taxaCartaoFaixas: [{ ate: 100, valor: 3 }],
+      });
+
+      const result = await service.preview(
+        negocioId,
+        dtoBase({
+          itens: [{ produtoId: 'p1', quantidade: 1 }],
+          pagamento: { metodo: 'CARTAO_CREDITO' },
+        }),
+        usuarioId,
+      );
+
+      expect(result.total).toBe(53);
+      expect(result.taxaCartao).toBe(3);
     });
   });
 });

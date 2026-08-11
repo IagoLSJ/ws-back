@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { NegociosService } from './negocios.service';
 import { CriarNegocioDto } from './dto/criar-negocio.dto';
@@ -38,6 +38,13 @@ export class NegociosController {
   @ApiOperation({ summary: 'Obter negócio' })
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);
+  }
+
+  @Get(':id/pix')
+  @Roles(RoleNegocio.OPERADOR)
+  @ApiOperation({ summary: 'Gerar payload PIX (BR Code) para um valor' })
+  gerarPix(@Param('id') id: string, @Query('valor') valor?: string) {
+    return this.service.gerarPix(id, valor ? Number(valor) : undefined);
   }
 
   @Patch(':id')
@@ -117,17 +124,17 @@ export class NegociosController {
     return this.service.criarTaxaFreteBairro(id, dto);
   }
 
-  @Patch('taxas-frete-bairro/:taxaId')
+  @Patch(':id/taxas-frete-bairro/:taxaId')
   @Roles(RoleNegocio.GERENTE)
   @ApiOperation({ summary: 'Atualizar taxa de frete de bairro' })
-  atualizarTaxaFreteBairro(@Param('taxaId') taxaId: string, @Body() dto: AtualizarTaxaFreteBairroDto) {
-    return this.service.atualizarTaxaFreteBairro(taxaId, dto);
+  atualizarTaxaFreteBairro(@Param('id') id: string, @Param('taxaId') taxaId: string, @Body() dto: AtualizarTaxaFreteBairroDto) {
+    return this.service.atualizarTaxaFreteBairro(id, taxaId, dto);
   }
 
-  @Delete('taxas-frete-bairro/:taxaId')
+  @Delete(':id/taxas-frete-bairro/:taxaId')
   @Roles(RoleNegocio.GERENTE)
   @ApiOperation({ summary: 'Remover taxa de frete de bairro' })
-  removerTaxaFreteBairro(@Param('taxaId') taxaId: string) {
-    return this.service.removerTaxaFreteBairro(taxaId);
+  removerTaxaFreteBairro(@Param('id') id: string, @Param('taxaId') taxaId: string) {
+    return this.service.removerTaxaFreteBairro(id, taxaId);
   }
 }

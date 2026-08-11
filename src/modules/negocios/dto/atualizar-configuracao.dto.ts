@@ -101,5 +101,35 @@ export class AtualizarConfiguracaoDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  razaoSocial?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  cnpj?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  ie?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
   metaPhoneNumberId?: string;
+
+  @ApiPropertyOptional({ description: 'Chave PIX (CPF, CNPJ, e-mail, telefone ou aleatória)' })
+  @IsOptional()
+  @IsString()
+  chavePix?: string;
+
+  @ApiPropertyOptional({ description: 'Nome do recebedor (campo obrigatório no QR Code PIX)' })
+  @IsOptional()
+  @IsString()
+  pixNomeRecebedor?: string;
+
+  @ApiPropertyOptional({ description: 'Cidade do recebedor (campo obrigatório no QR Code PIX)' })
+  @IsOptional()
+  @IsString()
+  pixCidade?: string;
 }

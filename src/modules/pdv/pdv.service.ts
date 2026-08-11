@@ -35,8 +35,7 @@ export class PdvService {
     private redis: RedisService,
   ) {}
 
-  async checkout(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string, role?: string) {
-
+  async calcularTotais(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string, role?: string) {
     await this.caixaService.exigirCaixaAberto(negocioId, usuarioId);
 
     if (!dto.itens.length) {
@@ -125,6 +124,25 @@ export class PdvService {
     total = aplicarDesconto(total, dto.descontoTotal);
     let valorTotal = Math.max(0, Math.round(total * 100) / 100);
 
+    // Taxa de frete (entrega): taxa do bairro ou taxa fixa do negócio
+    let taxaFrete = 0;
+    if (dto.tipoEntrega === 'ENTREGA') {
+      const config = await this.prisma.configuracaoNegocio.findUnique({ where: { negocioId } });
+      const bairro = dto.endereco?.bairro;
+      if (bairro) {
+        const taxaBairro = await this.prisma.taxaFreteBairro.findFirst({
+          where: { negocioId, bairro: { equals: bairro, mode: 'insensitive' }, ativo: true },
+        });
+        if (taxaBairro) {
+          taxaFrete = Number(taxaBairro.taxa);
+        }
+      }
+      if (taxaFrete === 0) {
+        taxaFrete = Number(config?.taxaFrete ?? 0);
+      }
+      valorTotal = Math.round((valorTotal + taxaFrete) * 100) / 100;
+    }
+
     // Taxa de cartão (repasse): faixa aplicada a crédito e débito
     let taxaCartao = 0;
     const ehCartao =
@@ -163,6 +181,36 @@ export class PdvService {
       }
     }
 
+    return { produtos, itensData, valorTotal, taxaFrete, taxaCartao, troco, isCrediario, dadosPagamento, caixa };
+  }
+
+  async preview(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string, role?: string) {
+    const { valorTotal, taxaFrete, taxaCartao } = await this.calcularTotais(negocioId, dto, usuarioId, role);
+    return { total: valorTotal, taxaFrete, taxaCartao };
+  }
+
+  async checkout(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string, role?: string) {
+    const {
+      produtos,
+      itensData,
+      valorTotal,
+      taxaFrete,
+      taxaCartao,
+      troco,
+      isCrediario,
+      dadosPagamento,
+      caixa,
+    } = await this.calcularTotais(negocioId, dto, usuarioId, role);
+
+    // PIX: impede venda se o valor informado não corresponder ao total recalculado no servidor
+    if (dto.pagamento.metodo === MetodoPagamento.PIX && dto.pagamento.valorPago !== undefined) {
+      if (Math.abs(dto.pagamento.valorPago - valorTotal) > 0.01) {
+        throw new BadRequestException(
+          `Valor do PIX (${dto.pagamento.valorPago.toFixed(2)}) não confere com o total da venda (${valorTotal.toFixed(2)})`,
+        );
+      }
+    }
+
     const sessionId = `pdv-${negocioId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
     // TRANSAÇÃO ÚNICA: pedido + estoque + caixa
@@ -182,6 +230,7 @@ export class PdvService {
           clienteCpf: dto.clienteCpf || undefined,
           clienteNome: dto.clienteNome || undefined,
           troco: troco || undefined,
+          taxaFrete: taxaFrete > 0 ? taxaFrete : undefined,
           taxaCartao: taxaCartao || undefined,
           itens: { create: itensData.map(i => ({
             produtoId: i.produtoId,

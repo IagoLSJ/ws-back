@@ -49,4 +49,15 @@ export class PdvController {
   ) {
     return this.pdvService.checkout(businessId, dto, req.user?.id, req.user?.role);
   }
+
+  @Post('preview')
+  @Roles(RoleNegocio.OPERADOR)
+  @ApiOperation({ summary: 'Calcular total autoritativo da venda (sem efetuar)' })
+  async preview(
+    @Param('businessId') businessId: string,
+    @Body() dto: FinalizarPdvDto,
+    @Request() req: any,
+  ) {
+    return this.pdvService.preview(businessId, dto, req.user?.id, req.user?.role);
+  }
 }

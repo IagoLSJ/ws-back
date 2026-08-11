@@ -12,7 +12,12 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     } else {
       // Conexão direta via driver adapter
       const { Pool } = require('pg');
-      const pool = new Pool({ connectionString: url });
+      const pool = new Pool({
+        connectionString: url,
+        max: 5,                    // limite de conexões simultâneas (padrão pg é 10)
+        idleTimeoutMillis: 30000,  // fecha conexões ociosas após 30s
+        connectionTimeoutMillis: 10000,
+      });
       super({ adapter: new PrismaPg(pool) });
     }
   }

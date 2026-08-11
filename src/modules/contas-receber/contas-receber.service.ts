@@ -176,7 +176,22 @@ export class ContasReceberService {
       where: { id, negocioId },
       include: {
         cliente: { select: { id: true, nome: true, cpfCnpj: true } },
-        pedido: { select: { id: true, total: true, criadoEm: true } },
+        pedido: {
+          select: {
+            id: true,
+            total: true,
+            criadoEm: true,
+            observacao: true,
+            itens: {
+              select: {
+                produtoNome: true,
+                quantidade: true,
+                precoUnitario: true,
+                modificadores: true,
+              },
+            },
+          },
+        },
       },
     });
     if (!conta) throw new NotFoundException('Conta a receber não encontrada');

@@ -7,6 +7,7 @@ interface DadosComanda {
   tipoEntrega?: string;
   endereco?: string;
   status?: string;
+  total?: number;
   itens: Array<{ nome: string; quantidade: number; modificadores?: string[]; observacao?: string }>;
   observacao?: string;
   criadoEm: string;
@@ -80,6 +81,7 @@ export function gerarComandaHtml(dados: DadosComanda): string {
   table { width: 100%; border-collapse: collapse; }
   td { font-size: 20px; font-weight: 900; color: #000; }
   .endereco { font-size: 16px; font-weight: bold; color: #000; margin-top: 4px; padding: 4px 0; }
+  .total { margin-top: 6px; font-size: 20px; font-weight: 900; color: #000; text-align: center; }
   .obs { margin-top: 6px; font-size: 18px; font-weight: bold; color: #000; }
   .footer { text-align: center; margin-top: 10px; font-size: 18px; font-weight: bold; border-top: 2px solid #000; padding-top: 6px; color: #000; }
 </style>
@@ -97,6 +99,7 @@ export function gerarComandaHtml(dados: DadosComanda): string {
   </div>
   <hr>
   <table>${itensHtml}</table>
+  ${dados.total !== undefined ? `<div class="total">TOTAL: R$ ${dados.total.toFixed(2)}</div>` : ''}
   ${dados.observacao ? `<div class="obs">Obs: ${escapeHtml(dados.observacao)}</div>` : ''}
   <hr>
   <div class="footer">Obrigado!</div>
@@ -170,6 +173,17 @@ export async function imprimirComanda(dados: DadosComanda, printerInterface: str
     printer.newLine();
   }
   printer.drawLine();
+
+  if (dados.total !== undefined) {
+    printer.alignCenter();
+    printer.setTextSize(1, 1);
+    printer.bold(true);
+    printer.println(`TOTAL: R$ ${dados.total.toFixed(2)}`);
+    printer.bold(false);
+    printer.setTextNormal();
+    printer.alignLeft();
+    printer.drawLine();
+  }
 
   if (dados.observacao) {
     printer.alignLeft();

@@ -142,7 +142,30 @@ describe('ClientesService', () => {
       expect(result.contasReceber).toHaveLength(1);
       expect(mockPrisma.cliente.findUnique).toHaveBeenCalledWith({
         where: { id: 'c1' },
-        include: { contasReceber: { orderBy: { criadoEm: 'desc' }, take: 50 } },
+        include: {
+          contasReceber: {
+            orderBy: { criadoEm: 'desc' },
+            take: 50,
+            include: {
+              pedido: {
+                select: {
+                  id: true,
+                  total: true,
+                  criadoEm: true,
+                  observacao: true,
+                  itens: {
+                    select: {
+                      produtoNome: true,
+                      quantidade: true,
+                      precoUnitario: true,
+                      modificadores: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       });
     });
   });

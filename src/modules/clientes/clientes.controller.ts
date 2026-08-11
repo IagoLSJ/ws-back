@@ -25,12 +25,13 @@ export class ClientesController {
   @Get()
   @Roles(RoleNegocio.GERENTE, RoleNegocio.OPERADOR, RoleNegocio.SUPER_ADMIN)
   @ApiOperation({ summary: 'Listar clientes' })
-  listar(@Query('search') search?: string, @Query('page') page?: string, @Query('limit') limit?: string, @Query('comSaldo') comSaldo?: string) {
+  listar(@Query('search') search?: string, @Query('page') page?: string, @Query('limit') limit?: string, @Query('comSaldo') comSaldo?: string, @Query('comSaldoPositivo') comSaldoPositivo?: string) {
     return this.service.listar({
       search,
       page: page ? Number(page) : undefined,
       limit: limit ? Number(limit) : undefined,
       comSaldo: comSaldo === 'true',
+      comSaldoPositivo: comSaldoPositivo === 'true',
     });
   }
 

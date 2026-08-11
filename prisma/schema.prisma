@@ -176,6 +176,9 @@ model ConfiguracaoNegocio {
   cnpj                  String?
   ie                    String?
   razaoSocial           String?
+  chavePix              String?
+  pixNomeRecebedor      String?
+  pixCidade             String?
 
   negocio Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
 

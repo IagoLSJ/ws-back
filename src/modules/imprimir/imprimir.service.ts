@@ -59,6 +59,7 @@ export class ImprimirService {
       tipoEntrega: pedido.tipoEntrega || undefined,
       endereco: pedido.endereco ? formatarEndereco(pedido.endereco as any) : undefined,
       status: traduzirStatus(pedido.status),
+      total: Number(pedido.total),
       itens: pedido.itens.map(i => ({
         nome: i.produtoNome,
         quantidade: Number(i.quantidade),

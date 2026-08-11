@@ -8,6 +8,8 @@ import { AtualizarConfiguracaoDto } from './dto/atualizar-configuracao.dto';
 import { CriarTaxaFreteBairroDto, AtualizarTaxaFreteBairroDto } from './dto/gerenciar-taxa-frete-bairro.dto';
 import { RoleNegocio } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
+import { gerarPayloadPix } from '../../common/utils/pix';
+import { validarCpfCnpj } from '../../common/utils/documento';
 
 @Injectable()
 export class NegociosService {
@@ -91,6 +93,37 @@ export class NegociosService {
     return negocio;
   }
 
+  async gerarPix(id: string, valor?: number) {
+    const negocio = await this.prisma.negocio.findUnique({
+      where: { id },
+      include: { configuracoes: true },
+    });
+    if (!negocio) throw new NotFoundException('Negócio não encontrado');
+
+    const chave = negocio.configuracoes?.chavePix?.trim();
+    if (!chave) {
+      throw new BadRequestException('Chave PIX não configurada para este negócio');
+    }
+
+    const nomeRecebedor = negocio.configuracoes?.pixNomeRecebedor?.trim()
+      || negocio.configuracoes?.razaoSocial?.trim()
+      || negocio.nome;
+    const cidade = negocio.configuracoes?.pixCidade?.trim()
+      || (negocio.configuracoes?.endereco as any)?.cidade
+      || 'BRASIL';
+
+    const valorPix = valor && valor > 0 ? valor : 0;
+
+    const payload = gerarPayloadPix({
+      chave,
+      valor: valorPix,
+      nome: nomeRecebedor,
+      cidade,
+    });
+
+    return { payload, chave, valor: valorPix, nomeRecebedor, cidade };
+  }
+
   async update(id: string, dto: AtualizarNegocioDto) {
     await this.findOne(id);
 
@@ -109,6 +142,10 @@ export class NegociosService {
     const data: any = {};
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) data[key] = value;
+    }
+
+    if (data.chavePix !== undefined && data.chavePix !== '') {
+      this.validarChavePix(data.chavePix);
     }
 
     if (dto.estoqueMinimoPadrao !== undefined) {
@@ -268,15 +305,56 @@ export class NegociosService {
     });
   }
 
-  async atualizarTaxaFreteBairro(id: string, dto: AtualizarTaxaFreteBairroDto) {
+  async atualizarTaxaFreteBairro(negocioId: string, id: string, dto: AtualizarTaxaFreteBairroDto) {
     const data: any = {};
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) data[key] = value;
     }
-    return this.prisma.taxaFreteBairro.update({ where: { id }, data });
+    const result = await this.prisma.taxaFreteBairro.updateMany({
+      where: { id, negocioId },
+      data,
+    });
+    if (result.count === 0) throw new NotFoundException('Taxa de frete não encontrada');
+    return this.prisma.taxaFreteBairro.findUnique({ where: { id } });
   }
 
-  async removerTaxaFreteBairro(id: string) {
-    return this.prisma.taxaFreteBairro.delete({ where: { id } });
+  async removerTaxaFreteBairro(negocioId: string, id: string) {
+    const result = await this.prisma.taxaFreteBairro.deleteMany({
+      where: { id, negocioId },
+    });
+    if (result.count === 0) throw new NotFoundException('Taxa de frete não encontrada');
+    return { removida: true };
+  }
+
+  private validarChavePix(chave: string) {
+    const chaveLimpa = chave.replace(/\s+/g, '');
+    const digitos = chaveLimpa.replace(/\D/g, '');
+
+    // CPF/CNPJ: valida dígitos verificadores
+    if (digitos.length === 11 || digitos.length === 14) {
+      if (!validarCpfCnpj(chaveLimpa)) {
+        throw new BadRequestException('Chave PIX de CPF/CNPJ inválida');
+      }
+      return;
+    }
+
+    // Telefone: +55DDDNUMERO (mínimo razoável)
+    if (/^\+?55\d{10,11}$/.test(chaveLimpa) || /^55\d{10,11}$/.test(chaveLimpa)) {
+      return;
+    }
+
+    // E-mail: formato básico
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(chaveLimpa)) {
+      return;
+    }
+
+    // Chave aleatória (UUID)
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chaveLimpa)) {
+      return;
+    }
+
+    throw new BadRequestException(
+      'Chave PIX inválida. Use CPF, CNPJ, e-mail, telefone com DDD (ex.: 5511999999999) ou chave aleatória (UUID).',
+    );
   }
 }
