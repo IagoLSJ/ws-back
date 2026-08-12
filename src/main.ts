@@ -13,6 +13,7 @@ async function bootstrap() {
   app.enableCors({
     origin: (process.env.CORS_ORIGIN || 'https://localhost:5173').split(',').map((o) => o.trim().replace(/\/$/, '')),
     credentials: true,
+    maxAge: 86400,
   });
 
   app.setGlobalPrefix('api');

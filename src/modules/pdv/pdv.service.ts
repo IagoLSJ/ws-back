@@ -341,6 +341,9 @@ export class PdvService {
     // Invalida cache da vitrine após a venda (estoque pode ter zerado)
     await this.redis.del(`catalog:v2:${negocioId}:products`).catch(() => {});
 
+    // Invalida cache do caixa (novo movimento PAGAMENTO)
+    await this.caixaService.invalidarCaixaAtual(negocioId, usuarioId);
+
     // Fire-and-forget: impressão e NF-e (fora da transação)
     this.imprimirService.imprimirComanda(negocioId, pedido.id).catch((err) => {
       this.logger.error(`Erro ao imprimir comanda para pedido ${pedido.id}: ${err}`);

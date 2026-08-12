@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { CaixaService } from './caixa.service';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { RedisService } from '../../infra/cache/redis.service';
 
 const mockPrisma = {
   caixa: {
@@ -24,6 +25,13 @@ const mockPrisma = {
   $transaction: jest.fn(),
 };
 
+const mockRedis = {
+  get: jest.fn(),
+  setex: jest.fn(),
+  set: jest.fn(),
+  del: jest.fn(),
+};
+
 const criarMovimento = (
   id: string,
   tipo: string,
@@ -40,7 +48,7 @@ const criarMovimento = (
   ...overrides,
 });
 
-describe('CaixaService', () => {
+  describe('CaixaService', () => {
   let service: CaixaService;
   let prisma: typeof mockPrisma;
 
@@ -49,6 +57,7 @@ describe('CaixaService', () => {
       providers: [
         CaixaService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: RedisService, useValue: mockRedis },
       ],
     }).compile();
 
@@ -56,6 +65,9 @@ describe('CaixaService', () => {
     prisma = module.get(PrismaService);
 
     jest.clearAllMocks();
+    mockRedis.get.mockResolvedValue(null);
+    mockRedis.setex.mockResolvedValue('OK');
+    mockRedis.del.mockResolvedValue(0);
   });
 
   describe('temCaixaAberto', () => {

@@ -42,6 +42,7 @@ const mockImprimirService = {
 const mockCaixaService = {
   exigirCaixaAberto: jest.fn(),
   registrarPagamento: jest.fn(),
+  invalidarCaixaAtual: jest.fn(),
 };
 
 const mockContasReceberService = {
@@ -130,6 +131,7 @@ describe('PdvService', () => {
     prisma.cliente.findUnique.mockResolvedValue(null);
     prisma.negocio.findUnique.mockResolvedValue({ id: negocioId, cidade: null });
     caixaService.exigirCaixaAberto.mockResolvedValue(undefined);
+    caixaService.invalidarCaixaAtual.mockResolvedValue(undefined);
   });
 
   describe('checkout - validações', () => {

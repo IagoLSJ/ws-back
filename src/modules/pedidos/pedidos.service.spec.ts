@@ -68,6 +68,7 @@ const mockImprimirService = {
 const mockCaixaService = {
   exigirCaixaAberto: jest.fn(),
   registrarPagamento: jest.fn(),
+  invalidarCaixaAtual: jest.fn(),
 };
 
 describe('PedidosService', () => {
@@ -135,7 +136,7 @@ describe('PedidosService', () => {
     tx = {
       pedido: { create: jest.fn(), update: jest.fn() },
       estoqueItem: { findFirst: jest.fn(), update: jest.fn(), findMany: jest.fn() },
-      movimentacaoEstoque: { findFirst: jest.fn(), create: jest.fn() },
+      movimentacaoEstoque: { findFirst: jest.fn(), create: jest.fn(), findMany: jest.fn(), createMany: jest.fn() },
       carrinhoItem: { deleteMany: jest.fn() },
       pagamento: { update: jest.fn() },
     };
@@ -156,8 +157,12 @@ describe('PedidosService', () => {
     mockImprimirService.imprimirComanda.mockResolvedValue(undefined);
     mockCaixaService.exigirCaixaAberto.mockResolvedValue(undefined);
     mockCaixaService.registrarPagamento.mockResolvedValue(undefined);
+    mockCaixaService.invalidarCaixaAtual.mockResolvedValue(undefined);
     tx.pedido.create.mockResolvedValue(pedidoBase);
     tx.carrinhoItem.deleteMany.mockResolvedValue({ count: 1 });
+    tx.estoqueItem.findMany.mockResolvedValue([]);
+    tx.movimentacaoEstoque.findMany.mockResolvedValue([]);
+    tx.movimentacaoEstoque.createMany.mockResolvedValue({ count: 0 });
   });
 
   describe('checkout - validações', () => {
@@ -217,7 +222,7 @@ describe('PedidosService', () => {
         ],
       };
       prisma.carrinho.findUnique.mockResolvedValue(carrinho);
-      prisma.estoqueItem.findFirst.mockResolvedValue({ id: 'ei1', quantidadeAtual: 1, unidade: 'un' });
+      prisma.estoqueItem.findMany.mockResolvedValue([{ id: 'ei1', produtoId: 'p1', quantidadeAtual: 1, unidade: 'un' }]);
 
       await expect(service.checkout(slug, sessionId, dtoBase())).rejects.toThrow('Estoque insuficiente');
     });
@@ -239,20 +244,24 @@ describe('PedidosService', () => {
         itens: [{ id: 'ci1', produtoId: 'p1', quantidade: 1.5, opcoesSelecionadas: [], produto: produtoPeso }],
       };
       prisma.carrinho.findUnique.mockResolvedValue(carrinho);
-      prisma.estoqueItem.findFirst.mockResolvedValue({ id: 'ei1', quantidadeAtual: 5000, unidade: 'g' });
+      prisma.estoqueItem.findMany.mockResolvedValue([{ id: 'ei1', produtoId: 'p1', quantidadeAtual: 5000, unidade: 'g' }]);
       tx.pedido.create.mockResolvedValue({
         ...pedidoBase,
         total: 30,
         itens: [{ produtoId: 'p1', quantidade: 1.5 }],
       });
-      tx.estoqueItem.findFirst.mockResolvedValue({
-        id: 'ei1',
-        unidade: 'g',
-        quantidadeAtual: 5000,
-        produto: { controlaEstoque: true, vendaPorPeso: true },
-      });
+      tx.estoqueItem.findMany.mockResolvedValue([
+        {
+          id: 'ei1',
+          produtoId: 'p1',
+          negocioId,
+          unidade: 'g',
+          quantidadeAtual: 5000,
+          produto: { controlaEstoque: true, vendaPorPeso: true },
+        },
+      ]);
       tx.estoqueItem.update.mockResolvedValue({});
-      tx.movimentacaoEstoque.create.mockResolvedValue({});
+      tx.movimentacaoEstoque.createMany.mockResolvedValue({ count: 1 });
       tx.pedido.update.mockResolvedValue({});
 
       await service.checkout(slug, sessionId, dtoBase({ metodoPagamento: 'DINHEIRO', trocoPara: 50 }));
@@ -261,11 +270,11 @@ describe('PedidosService', () => {
         where: { id: 'ei1' },
         data: { quantidadeAtual: { decrement: 1500 } },
       });
-      expect(tx.movimentacaoEstoque.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ tipo: 'SAIDA_VENDA', quantidade: 1500 }),
-        }),
-      );
+      expect(tx.movimentacaoEstoque.createMany).toHaveBeenCalledWith({
+        data: expect.arrayContaining([
+          expect.objectContaining({ tipo: 'SAIDA_VENDA', quantidade: 1500 }),
+        ]),
+      });
       expect(tx.pedido.update).toHaveBeenCalledWith({
         where: { id: 'pedido1' },
         data: { status: 'CONFIRMADO' },
@@ -286,15 +295,15 @@ describe('PedidosService', () => {
         ],
       };
       prisma.carrinho.findUnique.mockResolvedValue(carrinho);
-      prisma.estoqueItem.findFirst.mockResolvedValue({ id: 'ei1', quantidadeAtual: 100, unidade: 'un' });
-      tx.estoqueItem.findFirst.mockResolvedValue(null);
+      prisma.estoqueItem.findMany.mockResolvedValue([{ id: 'ei1', produtoId: 'p1', quantidadeAtual: 100, unidade: 'un' }]);
+      tx.estoqueItem.findMany.mockResolvedValue([]);
       tx.pedido.update.mockResolvedValue({});
 
       const result = await service.checkout(slug, sessionId, dtoBase({ metodoPagamento: 'DINHEIRO' }));
 
       expect(result.id).toBe('pedido1');
       expect(tx.estoqueItem.update).not.toHaveBeenCalled();
-      expect(tx.movimentacaoEstoque.create).not.toHaveBeenCalled();
+      expect(tx.movimentacaoEstoque.createMany).not.toHaveBeenCalled();
     });
 
     it('deve continuar (não baixar novamente) quando o estoque já foi baixado (idempotência)', async () => {
@@ -308,20 +317,24 @@ describe('PedidosService', () => {
         ],
       };
       prisma.carrinho.findUnique.mockResolvedValue(carrinho);
-      prisma.estoqueItem.findFirst.mockResolvedValue({ id: 'ei1', quantidadeAtual: 100, unidade: 'un' });
-      tx.estoqueItem.findFirst.mockResolvedValue({
-        id: 'ei1',
-        unidade: 'un',
-        quantidadeAtual: 100,
-        produto: { controlaEstoque: true, vendaPorPeso: false },
-      });
-      tx.movimentacaoEstoque.findFirst.mockResolvedValue({ id: 'mov1' });
+      prisma.estoqueItem.findMany.mockResolvedValue([{ id: 'ei1', produtoId: 'p1', quantidadeAtual: 100, unidade: 'un' }]);
+      tx.estoqueItem.findMany.mockResolvedValue([
+        {
+          id: 'ei1',
+          produtoId: 'p1',
+          negocioId,
+          unidade: 'un',
+          quantidadeAtual: 100,
+          produto: { controlaEstoque: true, vendaPorPeso: false },
+        },
+      ]);
+      tx.movimentacaoEstoque.findMany.mockResolvedValue([{ estoqueItemId: 'ei1' }]);
       tx.pedido.update.mockResolvedValue({});
 
       await service.checkout(slug, sessionId, dtoBase({ metodoPagamento: 'DINHEIRO' }));
 
       expect(tx.estoqueItem.update).not.toHaveBeenCalled();
-      expect(tx.movimentacaoEstoque.create).not.toHaveBeenCalled();
+      expect(tx.movimentacaoEstoque.createMany).not.toHaveBeenCalled();
     });
   });
 
@@ -334,17 +347,20 @@ describe('PedidosService', () => {
         itens: [{ produtoId: 'p1', quantidade: 5 }],
         pagamentos: [],
       });
-      tx.movimentacaoEstoque.findFirst.mockResolvedValue({
-        estoqueItemId: 'ei1',
-        estoqueItem: {
-          id: 'ei1',
-          quantidadeAtual: 10,
-          unidade: 'un',
-          produto: { vendaPorPeso: false },
+      tx.movimentacaoEstoque.findMany.mockResolvedValue([
+        {
+          estoqueItemId: 'ei1',
+          estoqueItem: {
+            id: 'ei1',
+            produtoId: 'p1',
+            quantidadeAtual: 10,
+            unidade: 'un',
+            produto: { vendaPorPeso: false },
+          },
         },
-      });
+      ]);
       tx.estoqueItem.update.mockResolvedValue({});
-      tx.movimentacaoEstoque.create.mockResolvedValue({});
+      tx.movimentacaoEstoque.createMany.mockResolvedValue({ count: 1 });
       tx.pedido.update.mockResolvedValue({
         id: 'pedido1',
         status: 'CANCELADO',
@@ -359,11 +375,11 @@ describe('PedidosService', () => {
         where: { id: 'ei1' },
         data: { quantidadeAtual: { increment: 5 } },
       });
-      expect(tx.movimentacaoEstoque.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ tipo: 'ENTRADA', quantidade: 5 }),
-        }),
-      );
+      expect(tx.movimentacaoEstoque.createMany).toHaveBeenCalledWith({
+        data: expect.arrayContaining([
+          expect.objectContaining({ tipo: 'ENTRADA', quantidade: 5 }),
+        ]),
+      });
       expect(tx.pedido.update).toHaveBeenCalledWith({
         where: { id: 'pedido1' },
         data: { status: 'CANCELADO' },

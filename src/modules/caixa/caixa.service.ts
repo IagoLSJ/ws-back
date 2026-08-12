@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { RedisService } from '../../infra/cache/redis.service';
 import { AbrirCaixaDto } from './dto/abrir-caixa.dto';
 import { FecharCaixaDto } from './dto/fechar-caixa.dto';
 import { MovimentoCaixaDto } from './dto/movimento-caixa.dto';
@@ -7,26 +8,40 @@ import { TipoMovimentoCaixa, RoleNegocio } from '@prisma/client';
 
 @Injectable()
 export class CaixaService {
-  constructor(private prisma: PrismaService) {}
+  private readonly CACHE_ATUAL_TTL = 30;
 
-  async temCaixaAberto(negocioId: string, usuarioId?: string): Promise<boolean> {
+  constructor(private prisma: PrismaService, private redis: RedisService) {}
+
+  async buscarCaixaAberto(negocioId: string, usuarioId?: string) {
     const where: any = { negocioId, status: 'ABERTO' };
     if (usuarioId) where.operadorId = usuarioId;
-    const caixa = await this.prisma.caixa.findFirst({ where });
+    return this.prisma.caixa.findFirst({ where });
+  }
+
+  async temCaixaAberto(negocioId: string, usuarioId?: string): Promise<boolean> {
+    const caixa = await this.buscarCaixaAberto(negocioId, usuarioId);
     return !!caixa;
   }
 
   async exigirCaixaAberto(negocioId: string, usuarioId?: string): Promise<void> {
-    const temCaixa = await this.temCaixaAberto(negocioId, usuarioId);
-    if (!temCaixa) {
+    const caixa = await this.buscarCaixaAberto(negocioId, usuarioId);
+    if (!caixa) {
       throw new BadRequestException('Nenhum caixa aberto para você. Peça ao gerente para abrir um caixa.');
     }
   }
 
-  async abrir(negocioId: string, dto: AbrirCaixaDto, usuarioId: string) {
-    return this.prisma.$transaction(async (tx) => {
-      const operadorId = dto.operadorId || usuarioId;
+  private chaveCaixaAtual(negocioId: string, usuarioId: string) {
+    return `caixa:atual:${negocioId}:${usuarioId}`;
+  }
 
+  async invalidarCaixaAtual(negocioId: string, usuarioId?: string) {
+    if (!usuarioId) return;
+    await this.redis.del(this.chaveCaixaAtual(negocioId, usuarioId)).catch(() => {});
+  }
+
+  async abrir(negocioId: string, dto: AbrirCaixaDto, usuarioId: string) {
+    const operadorId = dto.operadorId || usuarioId;
+    const caixa = await this.prisma.$transaction(async (tx) => {
       // Valida se o operador já tem caixa aberto
       const jaTem = await tx.caixa.findFirst({
         where: { negocioId, operadorId, status: 'ABERTO' },
@@ -78,9 +93,22 @@ export class CaixaService {
         },
       });
     });
+
+    await this.invalidarCaixaAtual(negocioId, operadorId);
+    return caixa;
   }
 
   async atual(negocioId: string, usuarioId: string) {
+    const cacheKey = this.chaveCaixaAtual(negocioId, usuarioId);
+    const cacheado = await this.redis.get(cacheKey).catch(() => null);
+    if (cacheado !== null) {
+      try {
+        return JSON.parse(cacheado);
+      } catch {
+        // cache corrompido: recomputa abaixo
+      }
+    }
+
     const caixa = await this.prisma.caixa.findFirst({
       where: { negocioId, operadorId: usuarioId, status: 'ABERTO' },
       include: {
@@ -88,16 +116,21 @@ export class CaixaService {
         operador: { select: { id: true, nome: true, email: true } },
       },
     });
-    if (!caixa) return null;
 
-    const movimentos = await this.prisma.caixaMovimento.findMany({
-      where: { caixaId: caixa.id },
-      orderBy: { criadoEm: 'desc' },
-    });
+    let result: any = null;
+    if (caixa) {
+      const movimentos = await this.prisma.caixaMovimento.findMany({
+        where: { caixaId: caixa.id },
+        orderBy: { criadoEm: 'desc' },
+      });
 
-    const totais = await this.calcularTotais(movimentos);
+      const totais = await this.calcularTotais(movimentos);
 
-    return { ...caixa, ...totais, movimentos: movimentos.slice(0, 50) };
+      result = { ...caixa, ...totais, movimentos: movimentos.slice(0, 50) };
+    }
+
+    await this.redis.setex(cacheKey, this.CACHE_ATUAL_TTL, JSON.stringify(result)).catch(() => {});
+    return result;
   }
 
   async listarAbertos(negocioId: string) {
@@ -154,7 +187,8 @@ export class CaixaService {
   }
 
   async fechar(negocioId: string, dto: FecharCaixaDto, usuarioId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    let operadorId: string | undefined;
+    const atualizado = await this.prisma.$transaction(async (tx) => {
       const where: any = { negocioId, status: 'ABERTO' };
       if (dto.caixaId) {
         where.id = dto.caixaId;
@@ -164,6 +198,7 @@ export class CaixaService {
 
       const caixa = await tx.caixa.findFirst({ where });
       if (!caixa) throw new NotFoundException('Nenhum caixa aberto encontrado');
+      operadorId = caixa.operadorId ?? undefined;
 
       const movimentos = await tx.caixaMovimento.findMany({
         where: { caixaId: caixa.id },
@@ -212,10 +247,14 @@ export class CaixaService {
 
       return atualizado;
     });
+
+    await this.invalidarCaixaAtual(negocioId, operadorId);
+    return atualizado;
   }
 
   async movimento(negocioId: string, dto: MovimentoCaixaDto, usuarioId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    let operadorId: string | undefined;
+    const result = await this.prisma.$transaction(async (tx) => {
       const where: any = { negocioId, status: 'ABERTO' };
       if (dto.caixaId) {
         where.id = dto.caixaId;
@@ -225,6 +264,7 @@ export class CaixaService {
 
       const caixa = await tx.caixa.findFirst({ where });
       if (!caixa) throw new NotFoundException('Nenhum caixa aberto encontrado');
+      operadorId = caixa.operadorId ?? undefined;
 
       // OPERADOR só pode movimentar o próprio caixa
       if (dto.caixaId && caixa.operadorId !== usuarioId) {
@@ -278,6 +318,9 @@ export class CaixaService {
         },
       });
     });
+
+    await this.invalidarCaixaAtual(negocioId, operadorId);
+    return result;
   }
 
   async registrarPagamento(
@@ -303,6 +346,8 @@ export class CaixaService {
         descricao: `Venda #${pedidoId.slice(0, 8)}`,
       },
     });
+
+    await this.invalidarCaixaAtual(negocioId, caixa.operadorId || usuarioId);
   }
 
   private async calcularTotais(movimentos: any[]) {

@@ -5,7 +5,7 @@ import { CheckoutDto } from './dto/checkout.dto';
 import { EstoqueService } from '../estoque/estoque.service';
 import { ImprimirService } from '../imprimir/imprimir.service';
 import { CaixaService } from '../caixa/caixa.service';
-import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao, TipoEntrega } from '@prisma/client';
+import { StatusPedido, MetodoPagamento, StatusPagamento, TipoMovimentacao, TipoEntrega, TipoMovimentoCaixa } from '@prisma/client';
 import { verificarAbertoEm } from '../../common/utils/horario';
 import { calcularPrecoFinal } from '../../common/utils/preco';
 import { converterPeso } from '../../common/utils/unidade';
@@ -120,101 +120,127 @@ export class PedidosService {
     return { itensData, totalProdutos: Math.round(totalProdutos * 100) / 100 };
   }
 
-  private async baixarEstoque(negocioId: string, pedido: any, usuarioId?: string) {
-    const tx = this.prisma;
-    await this.baixarEstoqueTx(tx as any, negocioId, pedido, usuarioId);
-  }
-
   private async baixarEstoqueTx(tx: any, negocioId: string, pedido: any, usuarioId?: string) {
-    for (const item of pedido.itens) {
-      const estoqueItem = await tx.estoqueItem.findFirst({
-        where: { negocioId, produtoId: item.produtoId },
-        include: { produto: { select: { controlaEstoque: true, vendaPorPeso: true } } },
-      });
-      if (!estoqueItem || !estoqueItem.produto?.controlaEstoque) continue;
+    const produtoIds = [...new Set(pedido.itens.map((i: any) => i.produtoId))];
+    if (!produtoIds.length) return;
 
-      const jaBaixado = await tx.movimentacaoEstoque.findFirst({
-        where: {
-          estoqueItemId: estoqueItem.id,
-          tipo: TipoMovimentacao.SAIDA_VENDA,
-          referencia: pedido.id,
-        },
-      });
-      if (jaBaixado) continue;
+    const estoqueItens = await tx.estoqueItem.findMany({
+      where: { negocioId, produtoId: { in: produtoIds } },
+      include: { produto: { select: { controlaEstoque: true, vendaPorPeso: true } } },
+    });
+    if (!estoqueItens.length) {
+      await this.redis.del(`catalog:v2:${negocioId}:products`).catch(() => {});
+      return;
+    }
+
+    const jaBaixados = await tx.movimentacaoEstoque.findMany({
+      where: {
+        estoqueItemId: { in: estoqueItens.map((e: any) => e.id) },
+        tipo: TipoMovimentacao.SAIDA_VENDA,
+        referencia: pedido.id,
+      },
+      select: { estoqueItemId: true },
+    });
+    const jaBaixadoSet = new Set(jaBaixados.map((m: any) => m.estoqueItemId));
+
+    const updates: Promise<any>[] = [];
+    const movimentacoes: any[] = [];
+
+    for (const item of pedido.itens) {
+      const estoqueItem = estoqueItens.find((e: any) => e.produtoId === item.produtoId);
+      if (!estoqueItem || !estoqueItem.produto?.controlaEstoque) continue;
+      if (jaBaixadoSet.has(estoqueItem.id)) continue;
 
       const qtd = estoqueItem.produto.vendaPorPeso
         ? converterPeso(Number(item.quantidade), 'kg', estoqueItem.unidade)
         : Number(item.quantidade);
       const qtdAntes = Number(estoqueItem.quantidadeAtual);
-      await tx.estoqueItem.update({
-        where: { id: estoqueItem.id },
-        data: { quantidadeAtual: { decrement: qtd } },
-      });
-      await tx.movimentacaoEstoque.create({
-        data: {
-          negocioId,
-          estoqueItemId: estoqueItem.id,
-          usuarioId: usuarioId ?? null,
-          tipo: TipoMovimentacao.SAIDA_VENDA,
-          quantidade: qtd,
-          quantidadeAntes: qtdAntes,
-          quantidadeApos: qtdAntes - qtd,
-          motivo: `Pedido #${pedido.id.slice(0, 8)}`,
-          referencia: pedido.id,
-        },
+
+      updates.push(
+        tx.estoqueItem.update({
+          where: { id: estoqueItem.id },
+          data: { quantidadeAtual: { decrement: qtd } },
+        }),
+      );
+      movimentacoes.push({
+        negocioId,
+        estoqueItemId: estoqueItem.id,
+        usuarioId: usuarioId ?? null,
+        tipo: TipoMovimentacao.SAIDA_VENDA,
+        quantidade: qtd,
+        quantidadeAntes: qtdAntes,
+        quantidadeApos: qtdAntes - qtd,
+        motivo: `Pedido #${pedido.id.slice(0, 8)}`,
+        referencia: pedido.id,
       });
     }
+
+    if (updates.length) await Promise.all(updates);
+    if (movimentacoes.length) await tx.movimentacaoEstoque.createMany({ data: movimentacoes });
+
     await this.redis.del(`catalog:v2:${negocioId}:products`).catch(() => {});
   }
 
-  private async estornarEstoque(negocioId: string, pedido: any, usuarioId?: string) {
-    const tx = this.prisma;
-    await this.estornarEstoqueTx(tx as any, negocioId, pedido, usuarioId);
-  }
-
   private async estornarEstoqueTx(tx: any, negocioId: string, pedido: any, usuarioId?: string) {
-    for (const item of pedido.itens) {
-      const mov = await tx.movimentacaoEstoque.findFirst({
-        where: {
-          estoqueItem: { negocioId, produtoId: item.produtoId },
-          tipo: TipoMovimentacao.SAIDA_VENDA,
-          referencia: pedido.id,
-        },
-        include: {
-          estoqueItem: {
-            select: {
-              id: true,
-              quantidadeAtual: true,
-              unidade: true,
-              produto: { select: { vendaPorPeso: true } },
-            },
+    const movsSaida = await tx.movimentacaoEstoque.findMany({
+      where: {
+        estoqueItem: { negocioId },
+        tipo: TipoMovimentacao.SAIDA_VENDA,
+        referencia: pedido.id,
+      },
+      include: {
+        estoqueItem: {
+          select: {
+            id: true,
+            produtoId: true,
+            quantidadeAtual: true,
+            unidade: true,
+            produto: { select: { vendaPorPeso: true } },
           },
         },
-      });
+      },
+    });
+    if (!movsSaida.length) return;
+
+    const movPorProduto = new Map<string, any>();
+    for (const mov of movsSaida) {
+      if (mov.estoqueItem?.produtoId) movPorProduto.set(mov.estoqueItem.produtoId, mov);
+    }
+
+    const updates: Promise<any>[] = [];
+    const entradas: any[] = [];
+
+    for (const item of pedido.itens) {
+      const mov = movPorProduto.get(item.produtoId);
       if (!mov) continue;
 
       const qtd = mov.estoqueItem.produto?.vendaPorPeso
         ? converterPeso(Number(item.quantidade), 'kg', mov.estoqueItem.unidade)
         : Number(item.quantidade);
       const qtdAntes = Number(mov.estoqueItem.quantidadeAtual);
-      await tx.estoqueItem.update({
-        where: { id: mov.estoqueItemId },
-        data: { quantidadeAtual: { increment: qtd } },
-      });
-      await tx.movimentacaoEstoque.create({
-        data: {
-          negocioId,
-          estoqueItemId: mov.estoqueItemId,
-          usuarioId: usuarioId ?? null,
-          tipo: TipoMovimentacao.ENTRADA,
-          quantidade: qtd,
-          quantidadeAntes: qtdAntes,
-          quantidadeApos: qtdAntes + qtd,
-          motivo: `Estorno pedido #${pedido.id.slice(0, 8)}`,
-          referencia: pedido.id,
-        },
+
+      updates.push(
+        tx.estoqueItem.update({
+          where: { id: mov.estoqueItemId },
+          data: { quantidadeAtual: { increment: qtd } },
+        }),
+      );
+      entradas.push({
+        negocioId,
+        estoqueItemId: mov.estoqueItemId,
+        usuarioId: usuarioId ?? null,
+        tipo: TipoMovimentacao.ENTRADA,
+        quantidade: qtd,
+        quantidadeAntes: qtdAntes,
+        quantidadeApos: qtdAntes + qtd,
+        motivo: `Estorno pedido #${pedido.id.slice(0, 8)}`,
+        referencia: pedido.id,
       });
     }
+
+    if (updates.length) await Promise.all(updates);
+    if (entradas.length) await tx.movimentacaoEstoque.createMany({ data: entradas });
+
     await this.redis.del(`catalog:v2:${negocioId}:products`).catch(() => {});
   }
 
@@ -301,16 +327,22 @@ export class PedidosService {
       }
     }
 
-    for (const item of carrinho.itens) {
-      if (!item.produto.controlaEstoque) continue;
-      const estoqueItem = await this.prisma.estoqueItem.findFirst({
-        where: { negocioId, produtoId: item.produto.id },
+    const itensComEstoque = carrinho.itens.filter((i) => i.produto.controlaEstoque);
+    if (itensComEstoque.length) {
+      const estoqueItens = await this.prisma.estoqueItem.findMany({
+        where: {
+          negocioId,
+          produtoId: { in: itensComEstoque.map((i) => i.produto.id) },
+        },
       });
-      const qtd = item.produto.vendaPorPeso
-        ? converterPeso(Number(item.quantidade), 'kg', estoqueItem?.unidade)
-        : Number(item.quantidade);
-      if (!estoqueItem || Number(estoqueItem.quantidadeAtual) < qtd) {
-        throw new BadRequestException(`Estoque insuficiente para "${item.produto.nome}"`);
+      for (const item of itensComEstoque) {
+        const estoqueItem = estoqueItens.find((e) => e.produtoId === item.produto.id);
+        const qtd = item.produto.vendaPorPeso
+          ? converterPeso(Number(item.quantidade), 'kg', estoqueItem?.unidade)
+          : Number(item.quantidade);
+        if (!estoqueItem || Number(estoqueItem.quantidadeAtual) < qtd) {
+          throw new BadRequestException(`Estoque insuficiente para "${item.produto.nome}"`);
+        }
       }
     }
 
@@ -542,10 +574,7 @@ export class PedidosService {
   async confirmarPagamento(id: string, usuarioId?: string) {
     const pedido = await this.prisma.pedido.findUnique({
       where: { id },
-      include: {
-        itens: true,
-        pagamentos: true,
-      },
+      include: { itens: true, pagamentos: true },
     });
     if (!pedido) throw new NotFoundException('Pedido não encontrado');
 
@@ -556,85 +585,103 @@ export class PedidosService {
       throw new BadRequestException('Nenhum pagamento pendente para confirmar');
     }
 
-    await this.caixaService.exigirCaixaAberto(pedido.negocioId, usuarioId);
+    const caixa = await this.caixaService.buscarCaixaAberto(pedido.negocioId, usuarioId);
+    if (!caixa) {
+      throw new BadRequestException('Nenhum caixa aberto para você. Peça ao gerente para abrir um caixa.');
+    }
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.pagamento.update({
+    const pedidoAtualizado = await this.prisma.$transaction(async (tx) => {
+      const pagamentoAtualizado = await tx.pagamento.update({
         where: { id: pagamentoPendente.id },
         data: { status: StatusPagamento.APROVADO },
       });
+      pedido.pagamentos = pedido.pagamentos.map((p) =>
+        p.id === pagamentoAtualizado.id ? pagamentoAtualizado : p,
+      );
 
       if (pedido.status === StatusPedido.PENDENTE) {
         await tx.pedido.update({
           where: { id },
           data: { status: StatusPedido.CONFIRMADO },
         });
+        pedido.status = StatusPedido.CONFIRMADO;
       }
 
-      if (!pedido.itens.length) return;
-
-      const estoqueItens = await tx.estoqueItem.findMany({
-        where: {
-          negocioId: pedido.negocioId,
-          produtoId: { in: pedido.itens.map((i) => i.produtoId) },
-        },
-        include: {
-          produto: { select: { controlaEstoque: true, vendaPorPeso: true } },
+      await tx.caixaMovimento.create({
+        data: {
+          caixaId: caixa.id,
+          tipo: TipoMovimentoCaixa.PAGAMENTO,
+          valor: Number(pedido.total),
+          formaPagamento: pagamentoPendente.metodo,
+          pedidoId: pedido.id,
+          descricao: `Venda #${pedido.id.slice(0, 8)}`,
         },
       });
 
-      for (const item of pedido.itens) {
-        const estoqueItem = estoqueItens.find((e) => e.produtoId === item.produtoId);
-        if (!estoqueItem || !estoqueItem.produto?.controlaEstoque) continue;
-
-        const jaBaixado = await tx.movimentacaoEstoque.findFirst({
+      if (pedido.itens.length) {
+        const estoqueItens = await tx.estoqueItem.findMany({
           where: {
-            estoqueItemId: estoqueItem.id,
+            negocioId: pedido.negocioId,
+            produtoId: { in: pedido.itens.map((i) => i.produtoId) },
+          },
+          include: {
+            produto: { select: { controlaEstoque: true, vendaPorPeso: true } },
+          },
+        });
+
+        const jaBaixados = await tx.movimentacaoEstoque.findMany({
+          where: {
+            estoqueItemId: { in: estoqueItens.map((e) => e.id) },
             tipo: TipoMovimentacao.SAIDA_VENDA,
             referencia: pedido.id,
           },
+          select: { estoqueItemId: true },
         });
-        if (jaBaixado) continue;
+        const jaBaixadoSet = new Set(jaBaixados.map((m) => m.estoqueItemId));
 
-        const qtd = estoqueItem.produto.vendaPorPeso
-          ? converterPeso(Number(item.quantidade), 'kg', estoqueItem.unidade)
-          : Number(item.quantidade);
-        const qtdAntes = Number(estoqueItem.quantidadeAtual);
+        const updates: Promise<any>[] = [];
+        const movimentacoes: any[] = [];
 
-        await tx.estoqueItem.update({
-          where: { id: estoqueItem.id },
-          data: { quantidadeAtual: { decrement: qtd } },
-        });
+        for (const item of pedido.itens) {
+          const estoqueItem = estoqueItens.find((e) => e.produtoId === item.produtoId);
+          if (!estoqueItem || !estoqueItem.produto?.controlaEstoque) continue;
+          if (jaBaixadoSet.has(estoqueItem.id)) continue;
 
-        await tx.movimentacaoEstoque.create({
-          data: {
+          const qtd = estoqueItem.produto.vendaPorPeso
+            ? converterPeso(Number(item.quantidade), 'kg', estoqueItem.unidade)
+            : Number(item.quantidade);
+          const qtdAntes = Number(estoqueItem.quantidadeAtual);
+
+          updates.push(
+            tx.estoqueItem.update({
+              where: { id: estoqueItem.id },
+              data: { quantidadeAtual: { decrement: qtd } },
+            }),
+          );
+          movimentacoes.push({
             negocioId: pedido.negocioId,
             estoqueItemId: estoqueItem.id,
-            usuarioId,
+            usuarioId: usuarioId ?? null,
             tipo: TipoMovimentacao.SAIDA_VENDA,
             quantidade: qtd,
             quantidadeAntes: qtdAntes,
             quantidadeApos: qtdAntes - qtd,
             motivo: `Confirmação pagamento #${pedido.id.slice(0, 8)}`,
             referencia: pedido.id,
-          },
-        });
-      }
-    });
+          });
+        }
 
-    await this.caixaService.registrarPagamento(
-      pedido.negocioId,
-      pedido.id,
-      Number(pedido.total),
-      pagamentoPendente.metodo,
-      usuarioId,
-    );
+        if (updates.length) await Promise.all(updates);
+        if (movimentacoes.length) await tx.movimentacaoEstoque.createMany({ data: movimentacoes });
+      }
+
+      return pedido;
+    });
 
     await this.redis.del(`catalog:v2:${pedido.negocioId}:products`).catch(() => {});
 
-    return this.prisma.pedido.findUnique({
-      where: { id },
-      include: { itens: true, pagamentos: true },
-    });
+    await this.caixaService.invalidarCaixaAtual(pedido.negocioId, usuarioId);
+
+    return pedidoAtualizado;
   }
 }
