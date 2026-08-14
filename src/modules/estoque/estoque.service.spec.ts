@@ -232,6 +232,22 @@ describe('EstoqueService', () => {
       expect(result.message).toBe('Transferência realizada com sucesso');
     });
 
+    it('deve criar item no destino automaticamente quando não existir', async () => {
+      mockPrisma.estoqueItem.findFirst
+        .mockResolvedValueOnce(itemOrigem) // findOne
+        .mockResolvedValueOnce(null); // destino não possui o item
+      const itemCriado = { id: 'novo-destino', negocioId: 'n2', produtoId: null, nome: 'Produto', sku: null, quantidadeAtual: 0, estoqueMinimo: 5, unidade: 'un' };
+      mockPrisma.estoqueItem.create.mockResolvedValue(itemCriado);
+      mockSuccess();
+
+      const result = await service.transferir('n1', { itemOrigemId: 'origem1', negocioDestinoId: 'n2', quantidade: 5 } as any);
+
+      expect(mockPrisma.estoqueItem.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ negocioId: 'n2', nome: 'Produto', quantidadeAtual: 0 }) }),
+      );
+      expect(result.message).toBe('Transferência realizada com sucesso');
+    });
+
     it('deve rejeitar auto-transferência (mesmo negócio)', async () => {
       await expect(service.transferir('n1', { itemOrigemId: 'origem1', negocioDestinoId: 'n1', quantidade: 5 } as any))
         .rejects.toThrow('O negócio de destino deve ser diferente do negócio de origem');

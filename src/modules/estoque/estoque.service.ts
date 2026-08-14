@@ -256,24 +256,24 @@ export class EstoqueService {
       itemDestino = await this.prisma.estoqueItem.findFirst({
         where: { produtoId: itemOrigem.produtoId, negocioId: dto.negocioDestinoId },
       });
-      if (!itemDestino) throw new NotFoundException('Produto não encontrado no estoque de destino');
     } else {
       itemDestino = await this.prisma.estoqueItem.findFirst({
         where: { nome: itemOrigem.nome, negocioId: dto.negocioDestinoId, produtoId: null },
       });
+    }
 
-      if (!itemDestino) {
-        itemDestino = await this.prisma.estoqueItem.create({
-          data: {
-            negocioId: dto.negocioDestinoId,
-            nome: itemOrigem.nome,
-            sku: itemOrigem.sku,
-            unidade: itemOrigem.unidade,
-            estoqueMinimo: itemOrigem.estoqueMinimo,
-            quantidadeAtual: 0,
-          },
-        });
-      }
+    if (!itemDestino) {
+      itemDestino = await this.prisma.estoqueItem.create({
+        data: {
+          negocioId: dto.negocioDestinoId,
+          nome: itemOrigem.nome,
+          sku: itemOrigem.sku,
+          unidade: itemOrigem.unidade,
+          estoqueMinimo: itemOrigem.estoqueMinimo,
+          precoCusto: itemOrigem.precoCusto ?? undefined,
+          quantidadeAtual: 0,
+        },
+      });
     }
 
     if (itemOrigem.id === itemDestino.id) {
