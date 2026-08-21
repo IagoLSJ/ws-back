@@ -162,6 +162,10 @@ export class ImprimirService {
       taxaCartao: pedido.taxaCartao ? Number(pedido.taxaCartao) : undefined,
       total: Number(pedido.total),
       formaPagamento: pagamento ? this.traduzirPagamento(pagamento.metodo) : 'N/A',
+      pagamentos: pedido.pagamentos.map(pg => ({
+        metodo: this.traduzirPagamento(pg.metodo),
+        valor: Number(pg.valor),
+      })),
       troco: pedido.troco ? Number(pedido.troco) : undefined,
       tipoEntrega: pedido.tipoEntrega || undefined,
       endereco: pedido.endereco ? formatarEndereco(pedido.endereco as any) : undefined,

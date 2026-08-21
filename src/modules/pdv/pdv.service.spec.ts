@@ -420,7 +420,8 @@ describe('PdvService', () => {
 
       const data = tx.pedido.create.mock.calls[0][0].data;
       expect(data.total).toBe(53);
-      expect(data.pagamentos.create.dadosPagamento.taxaCartao).toBe(3);
+      expect(data.taxaCartao).toBe(3);
+      expect(data.pagamentos.create[0]).toMatchObject({ valor: 53, metodo: 'CARTAO_CREDITO' });
     });
 
     it('deve somar taxa de cartão no pagamento com cartão de débito', async () => {
@@ -440,7 +441,8 @@ describe('PdvService', () => {
 
       const data = tx.pedido.create.mock.calls[0][0].data;
       expect(data.total).toBe(53);
-      expect(data.pagamentos.create.dadosPagamento.taxaCartao).toBe(3);
+      expect(data.taxaCartao).toBe(3);
+      expect(data.pagamentos.create[0]).toMatchObject({ valor: 53, metodo: 'CARTAO_DEBITO' });
     });
 
     it('não deve calcular taxa para pagamento em PIX', async () => {
@@ -525,7 +527,9 @@ describe('PdvService', () => {
           data: expect.objectContaining({
             total: 50,
             pagamentos: expect.objectContaining({
-              create: expect.objectContaining({ status: 'PENDENTE' }),
+              create: expect.arrayContaining([
+                expect.objectContaining({ status: 'PENDENTE', valor: 50 }),
+              ]),
             }),
           }),
         }),
@@ -593,6 +597,155 @@ describe('PdvService', () => {
       ).resolves.toBeDefined();
       expect(tx.pedido.create).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ total: 20 }) }),
+      );
+    });
+  });
+
+  describe('checkout - pagamento misto', () => {
+    it('deve criar um pagamento e um movimento de caixa por parcela (cartão + PIX)', async () => {
+      prisma.produto.findMany.mockResolvedValue([{ ...produtoBase, preco: 50 }]);
+      prisma.configuracaoNegocio.findUnique.mockResolvedValue({
+        taxaCartaoFaixas: [{ ate: 100, valor: 3 }],
+      });
+      tx.pedido.create.mockResolvedValue(pedidoMock);
+      tx.caixaMovimento.create.mockResolvedValue({});
+
+      await service.checkout(
+        negocioId,
+        dtoBase({
+          itens: [{ produtoId: 'p1', quantidade: 1 }],
+          pagamentos: [
+            { metodo: 'CARTAO_CREDITO', valor: 33 },
+            { metodo: 'PIX', valor: 20 },
+          ],
+        }),
+        usuarioId,
+      );
+
+      // Taxa de cartão incide apenas na parcela do cartão (33) → faixa ≤100 = R$ 3
+      const data = tx.pedido.create.mock.calls[0][0].data;
+      expect(data.total).toBe(53);
+      expect(data.taxaCartao).toBe(3);
+      expect(data.pagamentos.create).toEqual([
+        expect.objectContaining({ valor: 33, metodo: 'CARTAO_CREDITO', status: 'APROVADO' }),
+        expect.objectContaining({ valor: 20, metodo: 'PIX', status: 'APROVADO' }),
+      ]);
+      expect(tx.caixaMovimento.create).toHaveBeenCalledTimes(2);
+      expect(tx.caixaMovimento.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ valor: 33, formaPagamento: 'CARTAO_CREDITO' }),
+        }),
+      );
+      expect(tx.caixaMovimento.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ valor: 20, formaPagamento: 'PIX' }),
+        }),
+      );
+    });
+
+    it('deve calcular troco quando há parcela em dinheiro com valorPago maior', async () => {
+      prisma.produto.findMany.mockResolvedValue([{ ...produtoBase, preco: 50 }]);
+      tx.pedido.create.mockResolvedValue(pedidoMock);
+
+      await service.checkout(
+        negocioId,
+        dtoBase({
+          itens: [{ produtoId: 'p1', quantidade: 1 }],
+          pagamentos: [
+            { metodo: 'DINHEIRO', valor: 30, valorPago: 50 },
+            { metodo: 'PIX', valor: 20 },
+          ],
+        }),
+        usuarioId,
+      );
+
+      const data = tx.pedido.create.mock.calls[0][0].data;
+      expect(data.total).toBe(50);
+      expect(data.troco).toBe(20);
+    });
+
+    it('deve lançar BadRequest quando a soma das parcelas não cobrir o total', async () => {
+      prisma.produto.findMany.mockResolvedValue([{ ...produtoBase, preco: 50 }]);
+
+      await expect(
+        service.checkout(
+          negocioId,
+          dtoBase({
+            itens: [{ produtoId: 'p1', quantidade: 1 }],
+            pagamentos: [
+              { metodo: 'CARTAO_CREDITO', valor: 20 },
+              { metodo: 'PIX', valor: 10 },
+            ],
+          }),
+          usuarioId,
+        ),
+      ).rejects.toThrow('Pagamento insuficiente');
+    });
+
+    it('deve lançar BadRequest quando a soma das parcelas exceder o total', async () => {
+      prisma.produto.findMany.mockResolvedValue([{ ...produtoBase, preco: 50 }]);
+
+      await expect(
+        service.checkout(
+          negocioId,
+          dtoBase({
+            itens: [{ produtoId: 'p1', quantidade: 1 }],
+            pagamentos: [
+              { metodo: 'CARTAO_CREDITO', valor: 40 },
+              { metodo: 'PIX', valor: 30 },
+            ],
+          }),
+          usuarioId,
+        ),
+      ).rejects.toThrow('excede o total da venda');
+    });
+
+    it('deve criar conta a receber apenas da parcela crediária quando misto', async () => {
+      prisma.produto.findMany.mockResolvedValue([{ ...produtoBase, preco: 50 }]);
+      prisma.cliente.findUnique.mockResolvedValue({ id: 'cl1', saldoDevedor: 0, limiteCredito: 1000 });
+      tx.pedido.create.mockResolvedValue({ ...pedidoMock, total: 50 });
+      tx.caixaMovimento.create.mockResolvedValue({});
+      tx.contaReceber.create.mockResolvedValue({});
+      tx.cliente.update.mockResolvedValue({});
+
+      await service.checkout(
+        negocioId,
+        dtoBase({
+          itens: [{ produtoId: 'p1', quantidade: 1 }],
+          pagamentos: [
+            { metodo: 'CREDIARIO', valor: 30 },
+            { metodo: 'PIX', valor: 20 },
+          ],
+          clienteId: 'cl1',
+          dataVencimento: '2026-09-01',
+        }),
+        usuarioId,
+      );
+
+      expect(tx.contaReceber.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ valorTotal: 30 }) }),
+      );
+      expect(tx.cliente.update).toHaveBeenCalledWith({
+        where: { id: 'cl1' },
+        data: { saldoDevedor: { increment: 30 } },
+      });
+      expect(tx.caixaMovimento.create).toHaveBeenCalledTimes(1);
+      expect(tx.caixaMovimento.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ valor: 20, formaPagamento: 'PIX' }),
+        }),
+      );
+      expect(tx.pedido.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            pagamentos: expect.objectContaining({
+              create: expect.arrayContaining([
+                expect.objectContaining({ metodo: 'CREDIARIO', status: 'PENDENTE' }),
+                expect.objectContaining({ metodo: 'PIX', status: 'APROVADO' }),
+              ]),
+            }),
+          }),
+        }),
       );
     });
   });

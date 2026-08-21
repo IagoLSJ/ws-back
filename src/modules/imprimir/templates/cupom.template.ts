@@ -18,6 +18,7 @@ export interface DadosCupom {
   taxaCartao?: number;
   total: number;
   formaPagamento: string;
+  pagamentos?: Array<{ metodo: string; valor: number }>;
   troco?: number;
   tipoEntrega?: string;
   endereco?: string;
@@ -72,6 +73,13 @@ export function gerarCupomHtml(dados: DadosCupom): string {
   const tributoHtml = dados.tributosAproximados && dados.tributosAproximados > 0
     ? `<tr><td>Tributos aproximados</td><td style="text-align:right">R$ ${dados.tributosAproximados.toFixed(2)}</td></tr>`
     : '';
+
+  const ehPrazo = dados.formaPagamento === 'A Prazo'
+    || (Array.isArray(dados.pagamentos) && dados.pagamentos.some(p => p.metodo === 'A Prazo'));
+
+  const pagamentosHtml = Array.isArray(dados.pagamentos) && dados.pagamentos.length
+    ? dados.pagamentos.map(p => `<tr><td>${escapeHtml(p.metodo)}</td><td style="text-align:right">R$ ${p.valor.toFixed(2)}</td></tr>`).join('')
+    : `<tr><td>${escapeHtml(dados.formaPagamento)}</td><td style="text-align:right">R$ ${dados.total.toFixed(2)}</td></tr>`;
 
   return `<!DOCTYPE html>
 <html>
@@ -134,12 +142,14 @@ export function gerarCupomHtml(dados: DadosCupom): string {
     ${dados.taxaFrete > 0 ? `<tr><td>Frete</td><td style="text-align:right">R$ ${dados.taxaFrete.toFixed(2)}</td></tr>` : ''}
     ${dados.taxaCartao ? `<tr><td>Taxa cartão</td><td style="text-align:right">+ R$ ${dados.taxaCartao.toFixed(2)}</td></tr>` : ''}
     ${tributoHtml}
-    <tr class="total-row"><td>${dados.formaPagamento === 'A Prazo' ? 'VALOR DA COMPRA' : 'TOTAL A PAGAR'}</td><td style="text-align:right">R$ ${dados.total.toFixed(2)}</td></tr>
+    <tr class="total-row"><td>${ehPrazo ? 'VALOR DA COMPRA' : 'TOTAL A PAGAR'}</td><td style="text-align:right">R$ ${dados.total.toFixed(2)}</td></tr>
   </table>
   <hr>
-  <div style="text-align:center;font-size:${is58 ? 11 : 12}px">
-    <strong>${escapeHtml(dados.formaPagamento)}</strong>
-    ${dados.troco && dados.troco > 0 ? '<br>Troco: R$ ' + dados.troco.toFixed(2) : ''}
+  <div style="font-size:${is58 ? 11 : 12}px">
+    <table>
+      ${pagamentosHtml}
+    </table>
+    ${dados.troco && dados.troco > 0 ? '<div style="text-align:center">Troco: R$ ' + dados.troco.toFixed(2) + '</div>' : ''}
   </div>
   ${dados.tipoEntrega ? '<div style="text-align:center;font-size:10px;margin-top:3px">Tipo: ' + escapeHtml(dados.tipoEntrega) + '</div>' : ''}
   ${dados.endereco ? '<div style="text-align:center;font-size:10px">Endereço: ' + escapeHtml(dados.endereco) + '</div>' : ''}

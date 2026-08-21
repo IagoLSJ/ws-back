@@ -8,6 +8,7 @@ import {
   MaxLength,
   IsEnum,
   IsObject,
+  ArrayNotEmpty,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -60,7 +61,13 @@ class PagamentoPdvDto {
   @IsEnum(MetodoPagamento)
   metodo!: MetodoPagamento;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Parcela do total da venda coberta por este método' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  valor?: number;
+
+  @ApiPropertyOptional({ description: 'Valor recebido (dinheiro). Pode ser maior que valor para gerar troco' })
   @IsOptional()
   @IsNumber()
   @Min(0)
@@ -74,10 +81,19 @@ export class FinalizarPdvDto {
   @Type(() => ItemPdvDto)
   itens!: ItemPdvDto[];
 
-  @ApiProperty({ type: PagamentoPdvDto })
+  @ApiProperty({ type: [PagamentoPdvDto], description: 'Pagamentos (misto: um por método). Ex.: [{ metodo: CARTAO_CREDITO, valor: 50 }, { metodo: PIX, valor: 20 }]' })
+  @IsOptional()
+  @IsArray()
+  @ArrayNotEmpty()
+  @ValidateNested({ each: true })
+  @Type(() => PagamentoPdvDto)
+  pagamentos?: PagamentoPdvDto[];
+
+  @ApiPropertyOptional({ type: PagamentoPdvDto, description: 'Formato legado (método único). Usado apenas se pagamentos não for informado' })
+  @IsOptional()
   @ValidateNested()
   @Type(() => PagamentoPdvDto)
-  pagamento!: PagamentoPdvDto;
+  pagamento?: PagamentoPdvDto;
 
   @ApiPropertyOptional()
   @IsOptional()

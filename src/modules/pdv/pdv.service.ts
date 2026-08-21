@@ -42,6 +42,13 @@ export class PdvService {
       throw new BadRequestException('Nenhum item na venda');
     }
 
+    // Normaliza pagamentos: aceita o novo formato (array) e o legado (objeto único)
+    const isLegado = !Array.isArray(dto.pagamentos);
+    const pagamentos = isLegado && dto.pagamento ? [dto.pagamento] : (dto.pagamentos ?? []);
+    if (!pagamentos.length) {
+      throw new BadRequestException('Informe ao menos uma forma de pagamento');
+    }
+
     const produtos = await this.prisma.produto.findMany({
       where: {
         id: { in: dto.itens.map((i) => i.produtoId) },
@@ -143,45 +150,87 @@ export class PdvService {
       valorTotal = Math.round((valorTotal + taxaFrete) * 100) / 100;
     }
 
-    // Taxa de cartão (repasse): faixa aplicada a crédito e débito
+    // Taxa de cartão (repasse)
+    // - Legado (método único): faixa aplicada sobre o total (comportamento anterior)
+    // - Misto: faixa aplicada apenas sobre a soma das parcelas de cartão
     let taxaCartao = 0;
-    const ehCartao =
-      dto.pagamento.metodo === MetodoPagamento.CARTAO_CREDITO ||
-      dto.pagamento.metodo === MetodoPagamento.CARTAO_DEBITO;
-    if (ehCartao) {
-      const config = await this.prisma.configuracaoNegocio.findUnique({ where: { negocioId } });
-      const faixas = Array.isArray(config?.taxaCartaoFaixas)
-        ? (config.taxaCartaoFaixas as { ate: number; valor: number }[])
-        : [];
-      taxaCartao = calcularTaxaCartao(valorTotal, faixas);
-      valorTotal = Math.round((valorTotal + taxaCartao) * 100) / 100;
+    const ehCartao = (m: MetodoPagamento) =>
+      m === MetodoPagamento.CARTAO_CREDITO || m === MetodoPagamento.CARTAO_DEBITO;
+    if (isLegado) {
+      if (ehCartao(pagamentos[0].metodo)) {
+        const config = await this.prisma.configuracaoNegocio.findUnique({ where: { negocioId } });
+        const faixas = Array.isArray(config?.taxaCartaoFaixas)
+          ? (config.taxaCartaoFaixas as { ate: number; valor: number }[])
+          : [];
+        taxaCartao = calcularTaxaCartao(valorTotal, faixas);
+        valorTotal = Math.round((valorTotal + taxaCartao) * 100) / 100;
+      }
+    } else {
+      const somaCartao = pagamentos.reduce(
+        (s, p) => s + (ehCartao(p.metodo) ? Number(p.valor ?? 0) : 0),
+        0,
+      );
+      if (somaCartao > 0) {
+        const config = await this.prisma.configuracaoNegocio.findUnique({ where: { negocioId } });
+        const faixas = Array.isArray(config?.taxaCartaoFaixas)
+          ? (config.taxaCartaoFaixas as { ate: number; valor: number }[])
+          : [];
+        taxaCartao = calcularTaxaCartao(somaCartao, faixas);
+        valorTotal = Math.round((valorTotal + taxaCartao) * 100) / 100;
+      }
     }
 
-    const troco = dto.pagamento.valorPago && dto.pagamento.valorPago > valorTotal
-      ? Math.round((dto.pagamento.valorPago - valorTotal) * 100) / 100
-      : undefined;
-
-    const isCrediario = dto.pagamento.metodo === MetodoPagamento.CREDIARIO;
-
-    const dadosPagamento: any = {};
-    if (dto.pagamento.valorPago) dadosPagamento.valorPago = dto.pagamento.valorPago;
-    if (taxaCartao > 0) {
-      dadosPagamento.taxaCartao = taxaCartao;
+    // No formato legado, preenche a parcela única com o total final
+    if (isLegado) {
+      pagamentos[0].valor = valorTotal;
     }
+
+    // Valida que a soma das parcelas cobre exatamente o total da venda
+    const somaParcelas = pagamentos.reduce((s, p) => s + Number(p.valor ?? 0), 0);
+    if (Math.abs(somaParcelas - valorTotal) > 0.01) {
+      if (somaParcelas < valorTotal) {
+        throw new BadRequestException(
+          `Pagamento insuficiente. Faltam R$ ${(valorTotal - somaParcelas).toFixed(2)}`
+        );
+      }
+      throw new BadRequestException(
+        `Valor dos pagamentos (R$ ${somaParcelas.toFixed(2)}) excede o total da venda (R$ ${valorTotal.toFixed(2)})`
+      );
+    }
+
+    // Troco: apenas dinheiro gera troco (valorPago maior que a parcela em dinheiro)
+    let troco: number | undefined;
+    let somaDinheiroExtra = 0;
+    for (const p of pagamentos) {
+      if (p.metodo !== MetodoPagamento.DINHEIRO) continue;
+      const valor = Number(p.valor ?? 0);
+      if (p.valorPago !== undefined && Number(p.valorPago) < valor) {
+        throw new BadRequestException(
+          `Valor recebido em dinheiro (R$ ${Number(p.valorPago).toFixed(2)}) menor que a parcela em dinheiro (R$ ${valor.toFixed(2)})`
+        );
+      }
+      somaDinheiroExtra += Number(p.valorPago ?? valor) - valor;
+    }
+    troco = somaDinheiroExtra > 0 ? Math.round(somaDinheiroExtra * 100) / 100 : undefined;
+
+    const somaCrediario = pagamentos
+      .filter((p) => p.metodo === MetodoPagamento.CREDIARIO)
+      .reduce((s, p) => s + Number(p.valor ?? 0), 0);
+    const isCrediario = somaCrediario > 0;
 
     if (isCrediario) {
       if (!dto.clienteId) throw new BadRequestException('Selecione um cliente para venda a prazo');
       if (!dto.dataVencimento) throw new BadRequestException('Informe a data de vencimento');
       const cliente = await this.prisma.cliente.findUnique({ where: { id: dto.clienteId } });
       if (!cliente) throw new NotFoundException('Cliente não encontrado');
-      if (Number(cliente.saldoDevedor) + valorTotal > Number(cliente.limiteCredito)) {
+      if (Number(cliente.saldoDevedor) + somaCrediario > Number(cliente.limiteCredito)) {
         throw new BadRequestException(
           `Cliente não tem limite de crédito suficiente. Saldo devedor atual: R$ ${Number(cliente.saldoDevedor).toFixed(2)}, Limite: R$ ${Number(cliente.limiteCredito).toFixed(2)}`
         );
       }
     }
 
-    return { produtos, itensData, valorTotal, taxaFrete, taxaCartao, troco, isCrediario, dadosPagamento, caixa };
+    return { produtos, itensData, valorTotal, taxaFrete, taxaCartao, troco, isCrediario, somaCrediario, pagamentos, caixa };
   }
 
   async preview(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string, role?: string) {
@@ -197,17 +246,19 @@ export class PdvService {
       taxaFrete,
       taxaCartao,
       troco,
-      isCrediario,
-      dadosPagamento,
+      somaCrediario,
+      pagamentos,
       caixa,
     } = await this.calcularTotais(negocioId, dto, usuarioId, role);
 
-    // PIX: impede venda se o valor informado não corresponder ao total recalculado no servidor
-    if (dto.pagamento.metodo === MetodoPagamento.PIX && dto.pagamento.valorPago !== undefined) {
-      if (Math.abs(dto.pagamento.valorPago - valorTotal) > 0.01) {
-        throw new BadRequestException(
-          `Valor do PIX (${dto.pagamento.valorPago.toFixed(2)}) não confere com o total da venda (${valorTotal.toFixed(2)})`,
-        );
+    // PIX: impede divergência entre o valor exibido no QR e a parcela informada
+    for (const p of pagamentos) {
+      if (p.metodo === MetodoPagamento.PIX && p.valorPago !== undefined) {
+        if (Math.abs(Number(p.valorPago) - Number(p.valor)) > 0.01) {
+          throw new BadRequestException(
+            `Valor do PIX (${Number(p.valorPago).toFixed(2)}) não confere com a parcela informada (${Number(p.valor).toFixed(2)})`,
+          );
+        }
       }
     }
 
@@ -242,12 +293,14 @@ export class PdvService {
             modificadores: i.modificadores ?? undefined,
           })) },
           pagamentos: {
-            create: {
-              valor: valorTotal,
-              metodo: dto.pagamento.metodo,
-              status: isCrediario ? StatusPagamento.PENDENTE : StatusPagamento.APROVADO,
-              ...(Object.keys(dadosPagamento).length ? { dadosPagamento } : {}),
-            },
+            create: pagamentos.map(pg => ({
+              valor: Math.round(Number(pg.valor) * 100) / 100,
+              metodo: pg.metodo,
+              status: pg.metodo === MetodoPagamento.CREDIARIO
+                ? StatusPagamento.PENDENTE
+                : StatusPagamento.APROVADO,
+              ...(pg.valorPago !== undefined ? { dadosPagamento: { valorPago: Number(pg.valorPago) } } : {}),
+            })),
           },
         },
         include: { itens: true, pagamentos: true },
@@ -304,34 +357,37 @@ export class PdvService {
         });
       }
 
-      // Registro no caixa DENTRO da transação
-      if (!isCrediario) {
-        await tx.caixaMovimento.create({
-          data: {
-            caixaId: caixa.id,
-            tipo: 'PAGAMENTO' as any,
-            valor: valorTotal,
-            formaPagamento: dto.pagamento.metodo,
-            pedidoId: p.id,
-            descricao: `Venda #${p.id.slice(0, 8)}`,
-          },
-        });
+      // Registro no caixa DENTRO da transação (um movimento por parcela não-crediária)
+      if (somaCrediario < valorTotal) {
+        for (const pg of pagamentos) {
+          if (pg.metodo === MetodoPagamento.CREDIARIO) continue;
+          await tx.caixaMovimento.create({
+            data: {
+              caixaId: caixa.id,
+              tipo: 'PAGAMENTO' as any,
+              valor: Math.round(Number(pg.valor) * 100) / 100,
+              formaPagamento: pg.metodo,
+              pedidoId: p.id,
+              descricao: `Venda #${p.id.slice(0, 8)}`,
+            },
+          });
+        }
       }
 
-      // Crediário: cria conta a receber
-      if (isCrediario && dto.clienteId && dto.dataVencimento) {
+      // Crediário: cria conta a receber apenas da parcela a prazo
+      if (somaCrediario > 0 && dto.clienteId && dto.dataVencimento) {
         await tx.contaReceber.create({
           data: {
             clienteId: dto.clienteId,
             negocioId,
             pedidoId: p.id,
-            valorTotal,
+            valorTotal: somaCrediario,
             dataVencimento: new Date(dto.dataVencimento),
           },
         });
         await tx.cliente.update({
           where: { id: dto.clienteId },
-          data: { saldoDevedor: { increment: valorTotal } },
+          data: { saldoDevedor: { increment: somaCrediario } },
         });
       }
 
