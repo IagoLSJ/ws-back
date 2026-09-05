@@ -265,8 +265,8 @@ export class PdvService {
     const sessionId = `pdv-${negocioId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
     // TRANSAÇÃO ÚNICA: pedido + estoque + caixa
-    // Timeout elevado (15s) porque vendas com muitos itens geram várias queries
-    // sequenciais de estoque; o padrão do Prisma (5s) estoura em produção.
+    // Timeout elevado (30s) porque vendas com muitos itens geram várias queries
+    // de estoque; o padrão do Prisma (5s) estoura em produção.
     const pedido = await this.prisma.$transaction(async (tx) => {
       const p = await tx.pedido.create({
         data: {
@@ -325,37 +325,57 @@ export class PdvService {
         }
       }
 
+      // Agrupa por estoqueItem: com 71+ itens, o loop com update+create por item
+      // gera ~142 round-trips sequenciais e estoura o timeout da transação.
+      // O agrupamento também corrige quantidadeAntes quando o mesmo produto
+      // aparece mais de uma vez na venda.
+      const porEstoque = new Map<string, { ei: any; produto: any; qtd: number }>();
       for (const item of p.itens) {
         const produto = produtos.find((pr) => pr.id === item.produtoId);
         if (!produto?.controlaEstoque) continue;
         const ei = estoquePorProduto.get(item.produtoId);
+        if (!ei) {
+          throw new BadRequestException(`Estoque insuficiente para "${produto.nome}"`);
+        }
         // Venda por peso: a quantidade é informada em kg e convertida para a unidade do estoque
         const qtd = produto.vendaPorPeso
-          ? converterPeso(Number(item.quantidade), 'kg', ei?.unidade)
+          ? converterPeso(Number(item.quantidade), 'kg', ei.unidade)
           : Number(item.quantidade);
-        const qtdAtual = Number(ei?.quantidadeAtual ?? 0);
-        if (!ei || qtdAtual < qtd) {
-          throw new BadRequestException(`Estoque insuficiente para "${produto!.nome}"`);
+        const existente = porEstoque.get(ei.id);
+        if (existente) {
+          existente.qtd += qtd;
+        } else {
+          porEstoque.set(ei.id, { ei, produto, qtd });
         }
-        const qtdAntes = qtdAtual;
-        await tx.estoqueItem.update({
-          where: { id: ei.id },
-          data: { quantidadeAtual: { decrement: qtd } },
-        });
-        await tx.movimentacaoEstoque.create({
-          data: {
-            negocioId: ei.negocioId,
-            estoqueItemId: ei.id,
-            usuarioId: usuarioId ?? null,
-            tipo: TipoMovimentacao.SAIDA_VENDA,
-            quantidade: qtd,
-            quantidadeAntes: qtdAntes,
-            quantidadeApos: qtdAntes - qtd,
-            motivo: `PDV #${p.id.slice(0, 8)}`,
-            referencia: p.id,
-          },
+      }
+
+      const updates: Promise<any>[] = [];
+      const movimentacoes: any[] = [];
+      for (const { ei, produto, qtd } of porEstoque.values()) {
+        const qtdAntes = Number(ei.quantidadeAtual ?? 0);
+        if (qtdAntes < qtd) {
+          throw new BadRequestException(`Estoque insuficiente para "${produto.nome}"`);
+        }
+        updates.push(
+          tx.estoqueItem.update({
+            where: { id: ei.id },
+            data: { quantidadeAtual: { decrement: qtd } },
+          }),
+        );
+        movimentacoes.push({
+          negocioId: ei.negocioId,
+          estoqueItemId: ei.id,
+          usuarioId: usuarioId ?? null,
+          tipo: TipoMovimentacao.SAIDA_VENDA,
+          quantidade: qtd,
+          quantidadeAntes: qtdAntes,
+          quantidadeApos: qtdAntes - qtd,
+          motivo: `PDV #${p.id.slice(0, 8)}`,
+          referencia: p.id,
         });
       }
+      if (updates.length) await Promise.all(updates);
+      if (movimentacoes.length) await tx.movimentacaoEstoque.createMany({ data: movimentacoes });
 
       // Registro no caixa DENTRO da transação (um movimento por parcela não-crediária)
       if (somaCrediario < valorTotal) {
@@ -392,7 +412,7 @@ export class PdvService {
       }
 
       return p;
-    }, { timeout: 15000 });
+    }, { timeout: 30000 });
 
     // Invalida cache da vitrine após a venda (estoque pode ter zerado)
     await this.redis.del(`catalog:v2:${negocioId}:products`).catch(() => {});

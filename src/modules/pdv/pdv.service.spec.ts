@@ -114,7 +114,7 @@ describe('PdvService', () => {
     tx = {
       pedido: { create: jest.fn() },
       estoqueItem: { findMany: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
-      movimentacaoEstoque: { create: jest.fn() },
+      movimentacaoEstoque: { create: jest.fn(), createMany: jest.fn() },
       caixaMovimento: { create: jest.fn() },
       contaReceber: { create: jest.fn() },
       cliente: { update: jest.fn() },
@@ -187,6 +187,7 @@ describe('PdvService', () => {
       }]);
       tx.estoqueItem.update.mockResolvedValue({});
       tx.movimentacaoEstoque.create.mockResolvedValue({});
+      tx.movimentacaoEstoque.createMany.mockResolvedValue({ count: 0 });
       tx.caixaMovimento.create.mockResolvedValue({});
 
       const result = await service.checkout(
@@ -205,9 +206,11 @@ describe('PdvService', () => {
         where: { id: 'ei1' },
         data: { quantidadeAtual: { decrement: 2 } },
       });
-      expect(tx.movimentacaoEstoque.create).toHaveBeenCalledWith(
+      expect(tx.movimentacaoEstoque.createMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ tipo: 'SAIDA_VENDA', quantidade: 2, referencia: 'pedido1' }),
+          data: expect.arrayContaining([
+            expect.objectContaining({ tipo: 'SAIDA_VENDA', quantidade: 2, referencia: 'pedido1' }),
+          ]),
         }),
       );
       expect(tx.caixaMovimento.create).toHaveBeenCalled();
@@ -235,6 +238,7 @@ describe('PdvService', () => {
       }]);
       tx.estoqueItem.update.mockResolvedValue({});
       tx.movimentacaoEstoque.create.mockResolvedValue({});
+      tx.movimentacaoEstoque.createMany.mockResolvedValue({ count: 0 });
       tx.caixaMovimento.create.mockResolvedValue({});
 
       await service.checkout(negocioId, dtoBase({ itens: [{ produtoId: 'p1', quantidade: 1.5 }] }));
@@ -243,8 +247,10 @@ describe('PdvService', () => {
         where: { id: 'ei1' },
         data: { quantidadeAtual: { decrement: 1500 } },
       });
-      expect(tx.movimentacaoEstoque.create).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ quantidade: 1500 }) }),
+      expect(tx.movimentacaoEstoque.createMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.arrayContaining([expect.objectContaining({ quantidade: 1500 })]),
+        }),
       );
     });
 
