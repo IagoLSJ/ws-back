@@ -15,22 +15,22 @@ export class StorageService {
   private publicUrlBase: string;
 
   constructor(config: ConfigService) {
-    this.bucket = config.get<string>('supabase.bucket')!;
-    const endpoint = config.get<string>('supabase.endpointUrl')!;
-    const region = config.get<string>('supabase.region')!;
+    this.bucket = config.get<string>('r2.bucket')!;
+    const endpoint = config.get<string>('r2.endpointUrl')!;
+    const region = config.get<string>('r2.region')!;
 
     this.client = new S3Client({
       endpoint,
       region,
       credentials: {
-        accessKeyId: config.get<string>('supabase.accessKey')!,
-        secretAccessKey: config.get<string>('supabase.secretKey')!,
+        accessKeyId: config.get<string>('r2.accessKey')!,
+        secretAccessKey: config.get<string>('r2.secretKey')!,
       },
       forcePathStyle: true,
     });
 
-    const projectUrl = config.get<string>('supabase.url')!;
-    this.publicUrlBase = `${projectUrl}/storage/v1/object/public/${this.bucket}`;
+    const publicUrl = config.get<string>('r2.publicUrl')!;
+    this.publicUrlBase = publicUrl.replace(/\/+$/, '');
   }
 
   async getPresignedUploadUrl(key: string, expiry = 3600): Promise<string> {

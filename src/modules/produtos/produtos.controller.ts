@@ -4,6 +4,7 @@ import { ProdutosService } from './produtos.service';
 import { CriarProdutoDto } from './dto/criar-produto.dto';
 import { AtualizarProdutoDto } from './dto/atualizar-produto.dto';
 import { AjusteMassaProdutoDto } from './dto/ajuste-massa-produto.dto';
+import { PadraoFiscalProdutoDto } from './dto/padrao-fiscal-produto.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -46,6 +47,16 @@ export class ProdutosController {
     @Body() dto: AjusteMassaProdutoDto,
   ) {
     return this.service.ajustarPrecosEmMassa(negocioId, dto);
+  }
+
+  @Post('padrao-fiscal')
+  @Roles(RoleNegocio.GERENTE)
+  @ApiOperation({ summary: 'Aplicar padrão fiscal (NCM/CFOP/CSOSN) em massa nos produtos' })
+  aplicarPadraoFiscal(
+    @Param('businessId') negocioId: string,
+    @Body() dto: PadraoFiscalProdutoDto,
+  ) {
+    return this.service.aplicarPadraoFiscal(negocioId, dto);
   }
 
   @Get(':prodId')

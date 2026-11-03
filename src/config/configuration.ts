@@ -6,13 +6,13 @@ export default () => ({
   redis: {
     url: process.env.KV_URL || process.env.REDIS_URL || '',
   },
-  supabase: {
-    url: process.env.SUPABASE_URL || '',
-    endpointUrl: process.env.SUPABASE_S3_ENDPOINT || process.env.MINIO_ENDPOINT_URL || '',
-    accessKey: process.env.SUPABASE_S3_ACCESS_KEY || process.env.MINIO_ACCESS_KEY || '',
-    secretKey: process.env.SUPABASE_S3_SECRET_KEY || process.env.MINIO_SECRET_KEY || '',
-    bucket: process.env.SUPABASE_BUCKET || process.env.MINIO_BUCKET || 'multinegocio',
-    region: process.env.SUPABASE_S3_REGION || process.env.MINIO_REGION || 'us-east-1',
+  r2: {
+    endpointUrl: process.env.R2_ENDPOINT || '',
+    accessKey: process.env.R2_ACCESS_KEY_ID || '',
+    secretKey: process.env.R2_SECRET_ACCESS_KEY || '',
+    bucket: process.env.R2_BUCKET || process.env.MINIO_BUCKET || 'multinegocio',
+    publicUrl: process.env.R2_PUBLIC_URL || '',
+    region: process.env.R2_REGION || 'auto',
   },
   jwt: {
     secret: process.env.JWT_SECRET || '',

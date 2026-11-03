@@ -8,6 +8,7 @@ import {
   MaxLength,
   IsEnum,
   IsObject,
+  IsIn,
   ArrayNotEmpty,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -72,9 +73,44 @@ class PagamentoPdvDto {
   @IsNumber()
   @Min(0)
   valorPago?: number;
+
+  @ApiPropertyOptional({ description: 'IN 87/2025-CE: 1=integrado (TEF/SmartPOS), 2=não integrado (POS simples)', enum: ['1', '2'] })
+  @IsOptional()
+  @IsIn(['1', '2'])
+  tpIntegra?: string;
+
+  @ApiPropertyOptional({ description: 'IN 87/2025-CE: CNPJ da instituição de pagamento (adquirente/subadquirente/intermediador)' })
+  @IsOptional()
+  @IsString()
+  cnpjPagamento?: string;
+
+  @ApiPropertyOptional({ description: 'IN 87/2025-CE: código da bandeira (tabela MOC): 01 Visa, 02 Mastercard, 06 Elo, 99 Outros' })
+  @IsOptional()
+  @IsString()
+  tBand?: string;
+
+  @ApiPropertyOptional({ description: 'IN 87/2025-CE: número de autorização da transação (recibo da maquininha) ou endToEndId do PIX' })
+  @IsOptional()
+  @IsString()
+  cAut?: string;
+
+  @ApiPropertyOptional({ description: 'IN 87/2025-CE: CNPJ do beneficiário do pagamento (quando diferente do emitente)' })
+  @IsOptional()
+  @IsString()
+  cnpjReceb?: string;
+
+  @ApiPropertyOptional({ description: 'IN 87/2025-CE: identificador do terminal de pagamento' })
+  @IsOptional()
+  @IsString()
+  terminalPagamento?: string;
 }
 
 export class FinalizarPdvDto {
+  @ApiPropertyOptional({ description: 'Chave estável para evitar duplicidade ao sincronizar vendas offline' })
+  @IsOptional()
+  @IsString()
+  idempotencyKey?: string;
+
   @ApiProperty({ type: [ItemPdvDto] })
   @IsArray()
   @ValidateNested({ each: true })

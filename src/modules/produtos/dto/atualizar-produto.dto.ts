@@ -7,6 +7,10 @@ import {
   Min,
   ValidateNested,
   IsArray,
+  Max,
+  MaxLength,
+  IsDateString,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
@@ -153,12 +157,104 @@ export class AtualizarProdutoDto {
   @ApiPropertyOptional({ description: 'NCM' })
   @IsOptional()
   @IsString()
+  @Matches(/^\d{8}$/)
   ncm?: string;
 
   @ApiPropertyOptional({ description: 'CFOP' })
   @IsOptional()
   @IsString()
+  @Matches(/^\d{4}$/)
   cfop?: string;
+
+  @ApiPropertyOptional({ description: 'Origem da mercadoria (0=Nacional, 1=Importação direta, 2=Adquirida no mercado interno)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(8)
+  origem?: number;
+
+  @ApiPropertyOptional({ description: 'CSOSN para Simples Nacional/MEI' })
+  @IsOptional()
+  @IsString()
+  csosn?: string;
+
+  @ApiPropertyOptional({ description: 'CST PIS por produto' })
+  @IsOptional()
+  @IsString()
+  cstPis?: string;
+
+  @ApiPropertyOptional({ description: 'CST COFINS por produto' })
+  @IsOptional()
+  @IsString()
+  cstCofins?: string;
+
+  @ApiPropertyOptional({ description: 'CST de ICMS para Regime Normal' })
+  @IsOptional()
+  @IsString()
+  cstIcms?: string;
+
+  @ApiPropertyOptional({ description: 'Redução da base do ICMS em percentual; usada com CST 20' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  pRedBC?: number;
+
+  @ApiPropertyOptional({ description: 'Alíquota de ICMS (%)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  aliqIcms?: number;
+
+  @ApiPropertyOptional({ description: 'Alíquota de PIS (%)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  aliqPis?: number;
+
+  @ApiPropertyOptional({ description: 'Alíquota de COFINS (%)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  aliqCofins?: number;
+
+  @ApiPropertyOptional({ description: 'Percentual aproximado de tributos federais ao consumidor' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  aliqTributosFederais?: number;
+
+  @ApiPropertyOptional({ description: 'Percentual aproximado de tributos estaduais ao consumidor' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  aliqTributosEstaduais?: number;
+
+  @ApiPropertyOptional({ description: 'Percentual aproximado de tributos municipais ao consumidor' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  aliqTributosMunicipais?: number;
+
+  @ApiPropertyOptional({ description: 'Fonte das alíquotas aproximadas, por exemplo tabela IBPT vigente' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  fonteTributosAproximados?: string;
+
+  @ApiPropertyOptional({ description: 'Data inicial de vigência da fonte de alíquotas aproximadas' })
+  @IsOptional()
+  @IsDateString()
+  vigenciaTributosAproximados?: string;
+
+  @ApiPropertyOptional({ description: 'CEST (7 dígitos)' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{7}$/)
+  cest?: string;
 
   @ApiPropertyOptional({ description: 'Quantidade atual em estoque (usada ao criar item)' })
   @IsOptional()

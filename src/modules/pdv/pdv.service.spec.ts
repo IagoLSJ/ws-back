@@ -385,7 +385,7 @@ describe('PdvService', () => {
       );
 
       expect(tx.pedido.create).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ total: 15 }) }),
+        expect.objectContaining({ data: expect.objectContaining({ total: 15, descontoTotal: 5 }) }),
       );
     });
 
@@ -403,7 +403,7 @@ describe('PdvService', () => {
       );
 
       expect(tx.pedido.create).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ total: 18 }) }),
+        expect.objectContaining({ data: expect.objectContaining({ total: 18, descontoTotal: 2 }) }),
       );
     });
   });

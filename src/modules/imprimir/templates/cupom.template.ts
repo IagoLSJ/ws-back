@@ -26,7 +26,16 @@ export interface DadosCupom {
   criadoEm: string;
   chaveAcesso?: string;
   qrCodeUrl?: string;
+  urlChave?: string;
+  protocolo?: string;
+  contingencia?: boolean;
+  homologacao?: boolean;
+  statusFiscal?: string;
   tributosAproximados?: number;
+  tributosFederaisAproximados?: number;
+  tributosEstaduaisAproximados?: number;
+  tributosMunicipaisAproximados?: number;
+  fontesTributosAproximados?: string;
   logoUrl?: string;
   papelLargura?: number; // 58 ou 80 (mm)
 }
@@ -51,6 +60,11 @@ function formatCpfCnpj(v?: string): string {
   return v;
 }
 
+function formatChave(chave?: string): string {
+  if (!chave) return '';
+  return chave.replace(/(\d{4})(?=\d)/g, '$1 ');
+}
+
 export function gerarCupomHtml(dados: DadosCupom): string {
   const largura = dados.papelLargura || 80;
   const is58 = largura <= 58;
@@ -70,12 +84,29 @@ export function gerarCupomHtml(dados: DadosCupom): string {
     <tr><td colspan="2" style="font-size:9px;color:#000;padding-left:6px">und.: R$ ${unit}${i.modificadores?.length ? ' | ' + escapeHtml(i.modificadores.join(', ')) : ''}</td></tr>
   `}).join('');
 
-  const tributoHtml = dados.tributosAproximados && dados.tributosAproximados > 0
-    ? `<tr><td>Tributos aproximados</td><td style="text-align:right">R$ ${dados.tributosAproximados.toFixed(2)}</td></tr>`
+  const tributosDetalhados = [
+    ['Federais', dados.tributosFederaisAproximados],
+    ['Estaduais', dados.tributosEstaduaisAproximados],
+    ['Municipais', dados.tributosMunicipaisAproximados],
+  ].filter(([, valor]) => valor !== undefined && valor !== null)
+    .map(([nome, valor]) => `<tr><td>  ${nome}</td><td style="text-align:right">R$ ${Number(valor).toFixed(2)}</td></tr>`)
+    .join('');
+  const tributoHtml = dados.tributosAproximados !== undefined && dados.tributosAproximados !== null
+    ? `<tr><td>Tributos aproximados</td><td style="text-align:right">R$ ${dados.tributosAproximados.toFixed(2)}</td></tr>${tributosDetalhados}${dados.fontesTributosAproximados ? `<tr><td colspan="2" style="font-size:9px">Fonte: ${escapeHtml(dados.fontesTributosAproximados)}</td></tr>` : ''}`
     : '';
 
   const ehPrazo = dados.formaPagamento === 'A Prazo'
     || (Array.isArray(dados.pagamentos) && dados.pagamentos.some(p => p.metodo === 'A Prazo'));
+
+  const chaveFormatada = dados.chaveAcesso
+    ? dados.chaveAcesso.replace(/\d{4}(?=\d)/g, '$& ')
+    : '';
+
+  const avisosFiscais: string[] = [];
+  if (dados.homologacao) avisosFiscais.push('NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGAÇÃO - SEM VALOR FISCAL');
+  if (dados.contingencia) avisosFiscais.push('DANFE NFC-e EMITIDO EM CONTINGÊNCIA OFF-LINE - SEM VALOR FISCAL ATÉ AUTORIZAÇÃO');
+  if (!dados.contingencia && dados.statusFiscal !== 'AUTORIZADA') avisosFiscais.push('NÃO É DOCUMENTO FISCAL — AGUARDANDO AUTORIZAÇÃO DA SEFAZ');
+  const avisosHtml = avisosFiscais.map(a => `<div class="obs">${escapeHtml(a)}</div>`).join('');
 
   const pagamentosHtml = Array.isArray(dados.pagamentos) && dados.pagamentos.length
     ? dados.pagamentos.map(p => `<tr><td>${escapeHtml(p.metodo)}</td><td style="text-align:right">R$ ${p.valor.toFixed(2)}</td></tr>`).join('')
@@ -119,15 +150,17 @@ export function gerarCupomHtml(dados: DadosCupom): string {
   <hr>
   <h2>DANFE NFC-e</h2>
   <div class="header">
-    <b>Documento Auxiliar da Nota Fiscal do Consumidor Eletrônica</b><br>
+    <b>Documento Auxiliar da Nota Fiscal de Consumidor Eletrônica</b><br>
     ${dados.numeroNfe ? 'NFC-e nº ' + escapeHtml(dados.numeroNfe) : 'Pedido #' + escapeHtml(dados.numeroPedido)}
     ${dados.serieNfe ? ' | Série ' + escapeHtml(dados.serieNfe) : ''}<br>
-    ${escapeHtml(dados.criadoEm)}
+    ${escapeHtml(dados.criadoEm)}<br>
+    ${dados.protocolo ? 'Protocolo de Autorização: ' + escapeHtml(dados.protocolo) + '<br>' : ''}
   </div>
+  ${avisosHtml}
   <hr>
   <div class="header" style="text-align:left">
     <b>Consumidor:</b> ${escapeHtml(dados.clienteNome || 'NÃO IDENTIFICADO')}<br>
-    CPF: ${formatCpfCnpj(dados.clienteCpf)}
+     CPF/CNPJ: ${formatCpfCnpj(dados.clienteCpf)}
     ${dados.status ? '<br>Status: ' + escapeHtml(dados.status) : ''}
   </div>
   <hr>
@@ -154,11 +187,12 @@ export function gerarCupomHtml(dados: DadosCupom): string {
   ${dados.tipoEntrega ? '<div style="text-align:center;font-size:10px;margin-top:3px">Tipo: ' + escapeHtml(dados.tipoEntrega) + '</div>' : ''}
   ${dados.endereco ? '<div style="text-align:center;font-size:10px">Endereço: ' + escapeHtml(dados.endereco) + '</div>' : ''}
   ${dados.observacao ? '<div class="obs">Obs: ' + escapeHtml(dados.observacao) + '</div>' : ''}
-  ${dados.chaveAcesso ? `<hr><div class="chave">${dados.chaveAcesso}</div>` : ''}
-  ${dados.qrCodeUrl ? `<div class="qr"><img src="${dados.qrCodeUrl}" alt="QR Code NFC-e"></div>` : ''}
+  ${dados.chaveAcesso ? `<hr><div class="chave">${escapeHtml(chaveFormatada)}</div>` : ''}
+  ${dados.qrCodeUrl ? `<div class="qr"><img src="${escapeHtml(dados.qrCodeUrl)}" alt="QR Code NFC-e"></div>` : ''}
   <hr>
   <div class="footer">
-    Consulte pela chave de acesso em www.sefaz.xx.gov.br/nfce<br>
+    ${escapeHtml(dados.urlChave || 'http://nfce.sefaz.ce.gov.br')}<br>
+    Consulte a NFC-e pela chave de acesso ou QR Code<br>
     Volte sempre!
   </div>
 </body>

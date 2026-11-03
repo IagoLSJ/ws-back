@@ -137,6 +137,10 @@ export class ImprimirService {
     const logoUrl = (pedido.negocio as any).logoUrl || undefined;
 
     const statusTraduzido = traduzirStatus(pedido.status);
+    const documentoFiscal = await this.prisma.documentoFiscal.findUnique({
+      where: { pedidoId },
+      select: { status: true, protocolo: true, qrCodeUrl: true, authorizedEm: true, ambiente: true },
+    });
     const dadosCupom = {
       negocioNome: pedido.negocio.nome,
       razaoSocial: config?.razaoSocial || undefined,
@@ -157,7 +161,7 @@ export class ImprimirService {
         modificadores: extrairModificadores(i.modificadores),
       })),
       subtotal: totalItens,
-      desconto: 0,
+       desconto: Number(pedido.descontoTotal) || 0,
       taxaFrete,
       taxaCartao: pedido.taxaCartao ? Number(pedido.taxaCartao) : undefined,
       total: Number(pedido.total),
@@ -172,8 +176,17 @@ export class ImprimirService {
       observacao: pedido.observacao || undefined,
       criadoEm: new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(pedido.criadoEm),
       chaveAcesso: pedido.chaveAcesso || undefined,
-      qrCodeUrl: pedido.qrCodeUrl || undefined,
-      tributosAproximados: pedido.tributosAproximados ? Number(pedido.tributosAproximados) : undefined,
+      qrCodeUrl: documentoFiscal?.qrCodeUrl || pedido.qrCodeUrl || undefined,
+      urlChave: undefined,
+      protocolo: documentoFiscal?.protocolo || undefined,
+      contingencia: documentoFiscal?.status === 'CONTINGENCIA',
+      homologacao: documentoFiscal?.ambiente === 'HOMOLOGACAO',
+      statusFiscal: documentoFiscal?.status,
+       tributosAproximados: pedido.tributosAproximados != null ? Number(pedido.tributosAproximados) : undefined,
+       tributosFederaisAproximados: pedido.tributosFederaisAproximados != null ? Number(pedido.tributosFederaisAproximados) : undefined,
+       tributosEstaduaisAproximados: pedido.tributosEstaduaisAproximados != null ? Number(pedido.tributosEstaduaisAproximados) : undefined,
+       tributosMunicipaisAproximados: pedido.tributosMunicipaisAproximados != null ? Number(pedido.tributosMunicipaisAproximados) : undefined,
+       fontesTributosAproximados: pedido.fontesTributosAproximados || undefined,
       logoUrl,
     };
     const html = gerarCupomHtml(dadosCupom);
@@ -261,6 +274,8 @@ export class ImprimirService {
 
   private htmlToEscPos(html: string, papelLargura = 80): Buffer {
     const maxLen = papelLargura === 58 ? 32 : 48;
+    const qrCodeUrl = html.match(/<img[^>]*src="([^"]+)"[^>]*alt="QR Code NFC-e"/i)?.[1]
+      ?.replace(/&amp;/g, '&');
 
     let text = html
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -323,6 +338,19 @@ export class ImprimirService {
 
       if (isBold) buf.push(0x1B, 0x45, 0x00);
       if (isCenter) buf.push(0x1B, 0x61, 0x00);
+    }
+
+    if (qrCodeUrl) {
+      const qrData = Buffer.from(qrCodeUrl, 'utf8');
+      const qrLength = qrData.length + 3;
+      buf.push(0x1B, 0x61, 0x01);
+      // ESC/POS QR model 2, module size 4, error correction M.
+      buf.push(0x1D, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00);
+      buf.push(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x04);
+      buf.push(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31);
+      buf.push(0x1D, 0x28, 0x6B, qrLength % 256, Math.floor(qrLength / 256), 0x31, 0x50, 0x30);
+      for (const byte of qrData) buf.push(byte);
+      buf.push(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30, 0x0A, 0x1B, 0x61, 0x00);
     }
 
     buf.push(0x1B, 0x64, 0x03, 0x1B, 0x69);

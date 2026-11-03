@@ -5,6 +5,7 @@ import { StorageService } from '../../infra/storage/storage.service';
 import { CriarProdutoDto } from './dto/criar-produto.dto';
 import { AtualizarProdutoDto } from './dto/atualizar-produto.dto';
 import { AjusteMassaProdutoDto, CampoAjusteMassa, OperacaoAjusteMassa, TipoAjusteMassa } from './dto/ajuste-massa-produto.dto';
+import { PadraoFiscalProdutoDto } from './dto/padrao-fiscal-produto.dto';
 import { v4 as uuidv4 } from 'uuid';
 import { verificarAbertoEm } from '../../common/utils/horario';
 import { RoleNegocio } from '@prisma/client';
@@ -69,6 +70,22 @@ export class ProdutosService {
     }
   }
 
+  private validarTributosAproximados(produto: any): void {
+    const aliquotas = [
+      produto.aliqTributosFederais,
+      produto.aliqTributosEstaduais,
+      produto.aliqTributosMunicipais,
+    ];
+    const algumaAliquota = aliquotas.some((valor) => valor !== undefined && valor !== null);
+    if (!algumaAliquota) return;
+    if (aliquotas.some((valor) => valor === undefined || valor === null)) {
+      throw new BadRequestException('Informe as alíquotas aproximadas federal, estadual e municipal juntas');
+    }
+    if (!produto.fonteTributosAproximados?.trim() || !produto.vigenciaTributosAproximados) {
+      throw new BadRequestException('Informe a fonte e a vigência das alíquotas aproximadas');
+    }
+  }
+
   async create(negocioId: string, dto: CriarProdutoDto) {
     if (dto.plu) {
       const comPlu = await this.prisma.produto.findFirst({
@@ -79,6 +96,7 @@ export class ProdutosService {
     }
 
     this.validarGruposModificadores(dto.gruposModificadores);
+    this.validarTributosAproximados(dto);
 
     const produto = await this.prisma.produto.create({
       data: {
@@ -102,6 +120,21 @@ export class ProdutosService {
         unidadeMedida: dto.unidadeMedida,
         ncm: dto.ncm,
         cfop: dto.cfop,
+        origem: dto.origem ?? 0,
+        csosn: dto.csosn,
+        cstPis: dto.cstPis,
+        cstCofins: dto.cstCofins,
+        cstIcms: dto.cstIcms,
+        pRedBC: dto.pRedBC,
+        aliqIcms: dto.aliqIcms,
+        aliqPis: dto.aliqPis,
+        aliqCofins: dto.aliqCofins,
+        aliqTributosFederais: dto.aliqTributosFederais,
+        aliqTributosEstaduais: dto.aliqTributosEstaduais,
+        aliqTributosMunicipais: dto.aliqTributosMunicipais,
+        fonteTributosAproximados: dto.fonteTributosAproximados?.trim() || undefined,
+        vigenciaTributosAproximados: dto.vigenciaTributosAproximados ? new Date(dto.vigenciaTributosAproximados) : undefined,
+        cest: dto.cest,
         gruposModificadores: dto.gruposModificadores
           ? {
               create: dto.gruposModificadores.map((g) => ({
@@ -260,9 +293,20 @@ export class ProdutosService {
     }
 
     this.validarGruposModificadores(dto.gruposModificadores);
+    this.validarTributosAproximados({ ...existing, ...dto });
 
     const data: any = { ...dto };
     delete data.gruposModificadores;
+    if (dto.fonteTributosAproximados !== undefined) {
+      data.fonteTributosAproximados = typeof dto.fonteTributosAproximados === 'string'
+        ? dto.fonteTributosAproximados.trim() || null
+        : null;
+    }
+    if (dto.vigenciaTributosAproximados !== undefined) {
+      data.vigenciaTributosAproximados = dto.vigenciaTributosAproximados
+        ? new Date(dto.vigenciaTributosAproximados)
+        : null;
+    }
 
     const produto = await this.prisma.$transaction(async (tx) => {
       if (dto.gruposModificadores) {
@@ -715,6 +759,50 @@ export class ProdutosService {
       atualizados: resumo.length,
       totalEncontrados: produtos.length,
       resumo: resumo.slice(0, 100),
+    };
+  }
+
+  async aplicarPadraoFiscal(negocioId: string, dto: PadraoFiscalProdutoDto) {
+    const apenasVazios = dto.apenasVazios !== false;
+
+    const where: any = { negocioId };
+    if (dto.ids?.length) {
+      where.id = { in: dto.ids };
+    } else {
+      if (dto.categoriaId) where.categoriaId = dto.categoriaId;
+    }
+
+    const produtos = await this.prisma.produto.findMany({
+      where,
+      select: { id: true, nome: true, ncm: true, cfop: true, csosn: true, cest: true },
+    });
+
+    if (!produtos.length) {
+      throw new BadRequestException('Nenhum produto encontrado para aplicar o padrão fiscal');
+    }
+
+    const atualizacoes: Promise<any>[] = [];
+    for (const p of produtos) {
+      const data: any = {};
+      const devePreencher = (valor: string | null | undefined) => !apenasVazios || !valor;
+      if (devePreencher(p.ncm)) data.ncm = dto.ncm;
+      if (devePreencher(p.cfop)) data.cfop = dto.cfop;
+      if (devePreencher(p.csosn)) data.csosn = dto.csosn;
+      if (dto.cest && devePreencher(p.cest)) data.cest = dto.cest;
+      if (dto.origem !== undefined) data.origem = dto.origem;
+      if (!Object.keys(data).length) continue;
+      atualizacoes.push(this.prisma.produto.update({ where: { id: p.id }, data }));
+    }
+
+    await Promise.all(atualizacoes);
+
+    if (atualizacoes.length) {
+      await this.invalidateCache(negocioId);
+    }
+
+    return {
+      atualizados: atualizacoes.length,
+      totalEncontrados: produtos.length,
     };
   }
 

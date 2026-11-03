@@ -127,9 +127,11 @@ export class PdvService {
       };
     }));
 
-    let total = itensData.reduce((acc, i) => acc + i.precoUnitario * i.quantidade, 0);
-    total = aplicarDesconto(total, dto.descontoTotal);
-    let valorTotal = Math.max(0, Math.round(total * 100) / 100);
+    const subtotalItens = Number(itensData.reduce((acc, i) =>
+      acc + Math.round(i.precoUnitario * i.quantidade * 100) / 100, 0).toFixed(2));
+    const totalAposDesconto = aplicarDesconto(subtotalItens, dto.descontoTotal);
+    const descontoTotal = Math.max(0, Math.round((subtotalItens - totalAposDesconto) * 100) / 100);
+    let valorTotal = Math.max(0, Math.round(totalAposDesconto * 100) / 100);
 
     // Taxa de frete (entrega): taxa do bairro ou taxa fixa do negócio
     let taxaFrete = 0;
@@ -151,12 +153,14 @@ export class PdvService {
     }
 
     // Taxa de cartão (repasse)
-    // - Legado (método único): faixa aplicada sobre o total (comportamento anterior)
+    // - Método único (legado ou array de uma linha): faixa aplicada sobre o total
     // - Misto: faixa aplicada apenas sobre a soma das parcelas de cartão
     let taxaCartao = 0;
     const ehCartao = (m: MetodoPagamento) =>
       m === MetodoPagamento.CARTAO_CREDITO || m === MetodoPagamento.CARTAO_DEBITO;
-    if (isLegado) {
+    // Linha única: evita recalcular a taxa sobre uma base que já inclui a taxa
+    const ehMetodoUnico = pagamentos.length === 1;
+    if (ehMetodoUnico) {
       if (ehCartao(pagamentos[0].metodo)) {
         const config = await this.prisma.configuracaoNegocio.findUnique({ where: { negocioId } });
         const faixas = Array.isArray(config?.taxaCartaoFaixas)
@@ -180,8 +184,8 @@ export class PdvService {
       }
     }
 
-    // No formato legado, preenche a parcela única com o total final
-    if (isLegado) {
+    // Em método único, preenche a parcela com o total final (incluindo taxa)
+    if (ehMetodoUnico) {
       pagamentos[0].valor = valorTotal;
     }
 
@@ -230,7 +234,7 @@ export class PdvService {
       }
     }
 
-    return { produtos, itensData, valorTotal, taxaFrete, taxaCartao, troco, isCrediario, somaCrediario, pagamentos, caixa };
+    return { produtos, itensData, valorTotal, descontoTotal, taxaFrete, taxaCartao, troco, isCrediario, somaCrediario, pagamentos, caixa };
   }
 
   async preview(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string, role?: string) {
@@ -239,10 +243,19 @@ export class PdvService {
   }
 
   async checkout(negocioId: string, dto: FinalizarPdvDto, usuarioId?: string, role?: string) {
+    if (dto.idempotencyKey) {
+      const existente = await this.prisma.pedido.findFirst({
+        where: { negocioId, idempotencyKey: dto.idempotencyKey },
+        include: { itens: true, pagamentos: true },
+      });
+      if (existente) return existente;
+    }
+
     const {
       produtos,
       itensData,
       valorTotal,
+      descontoTotal,
       taxaFrete,
       taxaCartao,
       troco,
@@ -275,6 +288,7 @@ export class PdvService {
           usuarioId,
           status: StatusPedido.CONFIRMADO,
           total: valorTotal,
+          descontoTotal,
           tipoEntrega: dto.tipoEntrega ?? 'RETIRADA',
           endereco: dto.endereco ?? undefined,
           observacao: dto.observacao,
@@ -282,6 +296,7 @@ export class PdvService {
           clienteId: dto.clienteId || undefined,
           clienteCpf: dto.clienteCpf || undefined,
           clienteNome: dto.clienteNome || undefined,
+          idempotencyKey: dto.idempotencyKey || undefined,
           troco: troco || undefined,
           taxaFrete: taxaFrete > 0 ? taxaFrete : undefined,
           taxaCartao: taxaCartao || undefined,
@@ -293,14 +308,25 @@ export class PdvService {
             modificadores: i.modificadores ?? undefined,
           })) },
           pagamentos: {
-            create: pagamentos.map(pg => ({
-              valor: Math.round(Number(pg.valor) * 100) / 100,
-              metodo: pg.metodo,
-              status: pg.metodo === MetodoPagamento.CREDIARIO
-                ? StatusPagamento.PENDENTE
-                : StatusPagamento.APROVADO,
-              ...(pg.valorPago !== undefined ? { dadosPagamento: { valorPago: Number(pg.valorPago) } } : {}),
-            })),
+            create: pagamentos.map(pg => {
+              const digits = (v?: string) => String(v || '').replace(/\D/g, '');
+              const dados: Record<string, any> = {};
+              if (pg.valorPago !== undefined) dados.valorPago = Number(pg.valorPago);
+              if (pg.tpIntegra) dados.tpIntegra = pg.tpIntegra;
+              if (pg.cnpjPagamento) dados.cnpj = digits(pg.cnpjPagamento);
+              if (pg.tBand) dados.tBand = digits(pg.tBand).padStart(2, '0');
+              if (pg.cAut) dados.cAut = String(pg.cAut).trim();
+              if (pg.cnpjReceb) dados.CNPJReceb = digits(pg.cnpjReceb);
+              if (pg.terminalPagamento) dados.idTermPag = String(pg.terminalPagamento).trim();
+              return {
+                valor: Math.round(Number(pg.valor) * 100) / 100,
+                metodo: pg.metodo,
+                status: pg.metodo === MetodoPagamento.CREDIARIO
+                  ? StatusPagamento.PENDENTE
+                  : StatusPagamento.APROVADO,
+                ...(Object.keys(dados).length ? { dadosPagamento: dados } : {}),
+              };
+            }),
           },
         },
         include: { itens: true, pagamentos: true },
@@ -420,14 +446,17 @@ export class PdvService {
     // Invalida cache do caixa (novo movimento PAGAMENTO)
     await this.caixaService.invalidarCaixaAtual(negocioId, usuarioId);
 
-    // Fire-and-forget: impressão e NF-e (fora da transação)
+    // Fire-and-forget: impressão (fora da transação)
     this.imprimirService.imprimirComanda(negocioId, pedido.id).catch((err) => {
       this.logger.error(`Erro ao imprimir comanda para pedido ${pedido.id}: ${err}`);
     });
 
-    this.fiscalService.emitirNFe(negocioId, pedido.id).catch((err) => {
-      this.logger.error(`Erro ao emitir NF-e para pedido ${pedido.id}: ${err}`);
-    });
+    // Prepara o documento fiscal e enfileira a transmissão (retry/contingência na fila emissao-nfce)
+    try {
+      await this.fiscalService.emitirNFe(negocioId, pedido.id);
+    } catch (err) {
+      this.logger.error(`Erro ao preparar NF-e para pedido ${pedido.id}: ${err}`);
+    }
 
     return pedido;
   }

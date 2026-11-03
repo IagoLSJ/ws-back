@@ -253,6 +253,14 @@ export class PedidosService {
       if (existente) {
         return this.buscar(existente);
       }
+      const findPedido = (this.prisma.pedido as any).findFirst;
+      if (typeof findPedido === 'function') {
+        const persistido = await findPedido.call(this.prisma.pedido, {
+          where: { negocioId, idempotencyKey: dto.idempotencyKey },
+          include: { itens: true, pagamentos: true },
+        });
+        if (persistido) return persistido;
+      }
     }
 
     const config = await this.prisma.configuracaoNegocio.findUnique({ where: { negocioId } });
@@ -424,6 +432,7 @@ export class PedidosService {
               })()
             : undefined,
           ...mesaData,
+          idempotencyKey: dto.idempotencyKey || undefined,
           itens: { create: itensData },
           pagamentos: {
             create: {

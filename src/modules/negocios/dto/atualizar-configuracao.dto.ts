@@ -108,6 +108,11 @@ export class AtualizarConfiguracaoDto {
   @IsString()
   cnpj?: string;
 
+  @ApiPropertyOptional({ description: 'CNPJ padrão da adquirente para pagamentos feitos em POS não integrado' })
+  @IsOptional()
+  @IsString()
+  cnpjAdquirente?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

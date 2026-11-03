@@ -159,7 +159,10 @@ describe('NegociosService', () => {
       expect(result.id).toBe('n1');
       expect(mockPrisma.negocio.findUnique).toHaveBeenCalledWith({
         where: { id: 'n1' },
-        include: expect.objectContaining({ configuracoes: true }),
+        include: expect.objectContaining({
+          configuracoes: true,
+          configuracaoFiscal: { select: { cnpj: true } },
+        }),
       });
     });
   });
@@ -223,6 +226,34 @@ describe('NegociosService', () => {
         update: { estoqueMinimoPadrao: 10 },
       });
       expect(result.estoqueMinimoPadrao).toBe(10);
+    });
+
+    it('valida e normaliza os CNPJs salvos para pagamentos de cartão', async () => {
+      mockPrisma.negocio.findUnique.mockResolvedValue(negocioBase);
+      mockPrisma.configuracaoNegocio.upsert.mockResolvedValue({
+        negocioId: 'n1',
+        cnpj: '11222333000181',
+        cnpjAdquirente: '08561701000101',
+      });
+
+      await service.updateConfig('n1', {
+        cnpj: '11.222.333/0001-81',
+        cnpjAdquirente: '08.561.701/0001-01',
+      } as any);
+
+      expect(mockPrisma.configuracaoNegocio.upsert).toHaveBeenCalledWith({
+        where: { negocioId: 'n1' },
+        create: { negocioId: 'n1', cnpj: '11222333000181', cnpjAdquirente: '08561701000101' },
+        update: { cnpj: '11222333000181', cnpjAdquirente: '08561701000101' },
+      });
+    });
+
+    it('rejeita CNPJ inválido para a adquirente salva', async () => {
+      mockPrisma.negocio.findUnique.mockResolvedValue(negocioBase);
+
+      await expect(service.updateConfig('n1', { cnpjAdquirente: '11111111111111' } as any))
+        .rejects.toThrow('CNPJ da adquirente inválido');
+      expect(mockPrisma.configuracaoNegocio.upsert).not.toHaveBeenCalled();
     });
   });
 

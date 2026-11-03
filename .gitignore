@@ -44,3 +44,6 @@ parse-produtos.js
 produtos_*.txt
 prisma/produtos.txt
 prisma/migrate-producao.sql
+
+# Cache de tabelas IBPT (gerado pelos scripts)
+scripts/.cache-*.json

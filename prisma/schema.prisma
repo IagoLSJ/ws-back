@@ -83,6 +83,28 @@ enum TipoEntrega {
   MESA
 }
 
+enum FiscalAmbiente {
+  HOMOLOGACAO
+  PRODUCAO
+}
+
+enum FiscalRegime {
+  SIMPLES_NACIONAL
+  REGIME_NORMAL
+  MEI
+}
+
+enum FiscalStatusDocumento {
+  PENDENTE
+  PROCESSANDO
+  AUTORIZADA
+  REJEITADA
+  CANCELADA
+  PENDENTE_CONSULTA
+  CONTINGENCIA
+  ERRO
+}
+
 model Usuario {
   id            String   @id @default(uuid())
   nome          String
@@ -149,6 +171,8 @@ model Negocio {
   contasReceber     ContaReceber[]
   combos            Combo[]
   integracaoML      IntegracaoMercadoLivre?
+  configuracaoFiscal ConfiguracaoFiscal?
+  documentosFiscais DocumentoFiscal[]
 
   @@index([cidade])
   @@map("negocios")
@@ -174,6 +198,7 @@ model ConfiguracaoNegocio {
   cardapioImagens       Json?
   metaPhoneNumberId     String?   @unique
   cnpj                  String?
+  cnpjAdquirente        String?
   ie                    String?
   razaoSocial           String?
   chavePix              String?
@@ -183,6 +208,93 @@ model ConfiguracaoNegocio {
   negocio Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
 
   @@map("configuracoes_negocio")
+}
+
+model ConfiguracaoFiscal {
+  id                            String         @id @default(uuid())
+  negocioId                     String         @unique
+  ambiente                      FiscalAmbiente @default(HOMOLOGACAO)
+  regime                        FiscalRegime   @default(SIMPLES_NACIONAL)
+  cnpj                          String
+  ie                            String
+  razaoSocial                   String
+  endereco                      Json
+  serie                         Int            @default(1)
+  proximoNumero                 Int            @default(1)
+  cscId                         String?
+  cscCriptografado              String?        @db.Text
+  certificadoA1Criptografado    String?        @db.Text
+  certificadoSenhaCriptografada String?        @db.Text
+  certificadoNome               String?
+  certificadoValidade           DateTime?
+  permitirContingencia          Boolean        @default(false)
+  ativo                         Boolean        @default(false)
+  criadoEm                      DateTime       @default(now())
+  atualizadoEm                  DateTime       @updatedAt
+
+  negocio                       Negocio        @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  documentos                    DocumentoFiscal[]
+
+  @@map("configuracoes_fiscais")
+}
+
+model DocumentoFiscal {
+  id             String                @id @default(uuid())
+  negocioId      String
+  pedidoId       String                @unique
+  configuracaoId String
+  ambiente       FiscalAmbiente
+  modelo         String                @default("65")
+  status         FiscalStatusDocumento @default(PENDENTE)
+  numero         Int?
+  serie          Int?
+  chaveAcesso    String?               @unique
+  protocolo      String?
+  recibo         String?
+  xmlAssinado    String?               @db.Text
+  xmlAutorizado  String?               @db.Text
+  qrCodeUrl      String?               @db.Text
+  codigoStatus   String?
+  mensagem       String?               @db.Text
+  tentativas     Int                   @default(0)
+  authorizedEm   DateTime?
+  dhContingencia DateTime?
+  criadoEm       DateTime              @default(now())
+  atualizadoEm   DateTime              @updatedAt
+
+  negocio        Negocio               @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  pedido         Pedido                @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  configuracao   ConfiguracaoFiscal    @relation(fields: [configuracaoId], references: [id])
+  eventos        FiscalEvento[]
+
+  @@index([negocioId, status])
+  @@index([negocioId, criadoEm])
+  @@map("documentos_fiscais")
+}
+
+model FiscalEvento {
+  id            String          @id @default(uuid())
+  negocioId     String
+  documentoId   String?
+  tipo          String
+  chaveAcesso   String?
+  serie         Int?
+  numeroInicial Int?
+  numeroFinal   Int?
+  justificativa String
+  sequencia     Int             @default(1)
+  xmlAssinado   String?         @db.Text
+  xmlResposta   String?         @db.Text
+  cStat         String?
+  xMotivo       String?         @db.Text
+  protocolo     String?
+  criadoEm      DateTime        @default(now())
+
+  documento DocumentoFiscal? @relation(fields: [documentoId], references: [id], onDelete: SetNull)
+
+  @@index([negocioId, criadoEm])
+  @@index([documentoId])
+  @@map("fiscais_eventos")
 }
 
 model TaxaFreteBairro {
@@ -347,6 +459,21 @@ model Produto {
   unidadeMedida        String         @default("un")
   ncm                  String?
   cfop                 String?
+  origem               Int            @default(0)
+  csosn                String?
+  cstIcms              String?
+  cstPis               String?
+  cstCofins            String?
+  pRedBC               Decimal?       @db.Decimal(7, 4)
+  aliqIcms             Decimal?       @db.Decimal(7, 4)
+  aliqPis              Decimal?       @db.Decimal(7, 4)
+  aliqCofins           Decimal?       @db.Decimal(7, 4)
+  aliqTributosFederais Decimal?       @db.Decimal(7, 4)
+  aliqTributosEstaduais Decimal?      @db.Decimal(7, 4)
+  aliqTributosMunicipais Decimal?     @db.Decimal(7, 4)
+  fonteTributosAproximados String?
+  vigenciaTributosAproximados DateTime?
+  cest                 String?
   criadoEm             DateTime       @default(now())
   atualizadoEm         DateTime       @updatedAt
 
@@ -639,6 +766,7 @@ model Pedido {
   usuarioId      String?
   status         StatusPedido @default(PENDENTE)
   total          Decimal      @db.Decimal(10, 2)
+  descontoTotal  Decimal      @default(0) @db.Decimal(10, 2)
   tipoEntrega    TipoEntrega  @default(ENTREGA)
   taxaFrete      Decimal?     @db.Decimal(10, 2)
   observacao     String?
@@ -653,10 +781,15 @@ model Pedido {
   numeroNfe           String?
   serieNfe            String?
   tributosAproximados Decimal?   @db.Decimal(10, 2)
+  tributosFederaisAproximados Decimal? @db.Decimal(10, 2)
+  tributosEstaduaisAproximados Decimal? @db.Decimal(10, 2)
+  tributosMunicipaisAproximados Decimal? @db.Decimal(10, 2)
+  fontesTributosAproximados String?
   troco               Decimal?   @db.Decimal(10, 2)
   taxaCartao          Decimal    @default(0) @db.Decimal(10, 2)
   mesaId              String?
   mesaNumero          Int?
+  idempotencyKey      String?
   criadoEm            DateTime   @default(now())
   atualizadoEm        DateTime   @updatedAt
 
@@ -667,11 +800,13 @@ model Pedido {
   itens      PedidoItem[]
   pagamentos Pagamento[]
   contasReceber ContaReceber[]
+  documentoFiscal DocumentoFiscal?
 
   @@index([negocioId, criadoEm])
   @@index([sessionId])
   @@index([mesaId])
   @@index([clienteId])
+  @@unique([negocioId, idempotencyKey])
   @@map("pedidos")
 }
 

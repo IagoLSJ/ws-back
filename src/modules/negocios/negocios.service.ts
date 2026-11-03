@@ -9,7 +9,7 @@ import { CriarTaxaFreteBairroDto, AtualizarTaxaFreteBairroDto } from './dto/gere
 import { RoleNegocio } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { gerarPayloadPix } from '../../common/utils/pix';
-import { validarCpfCnpj } from '../../common/utils/documento';
+import { validarCpfCnpj, validarCnpj } from '../../common/utils/documento';
 
 @Injectable()
 export class NegociosService {
@@ -77,6 +77,7 @@ export class NegociosService {
       where: { id },
       include: {
         configuracoes: true,
+        configuracaoFiscal: { select: { cnpj: true } },
         _count: { select: { membros: true, produtos: true, categorias: true, pedidos: true } },
       },
     });
@@ -142,6 +143,20 @@ export class NegociosService {
     const data: any = {};
     for (const [key, value] of Object.entries(dto)) {
       if (value !== undefined) data[key] = value;
+    }
+
+    for (const campo of ['cnpj', 'cnpjAdquirente'] as const) {
+      if (data[campo] === undefined) continue;
+      const cnpj = String(data[campo] ?? '').replace(/\D/g, '');
+      if (!cnpj) {
+        data[campo] = null;
+        continue;
+      }
+      if (!validarCnpj(cnpj)) {
+        const nomeCampo = campo === 'cnpj' ? 'CNPJ de quem recebe' : 'CNPJ da adquirente';
+        throw new BadRequestException(`${nomeCampo} inválido`);
+      }
+      data[campo] = cnpj;
     }
 
     if (data.chavePix !== undefined && data.chavePix !== '') {

@@ -173,6 +173,15 @@ describe('ProdutosService', () => {
       expect(mockRedis.del).toHaveBeenCalledWith('catalog:v2:n1:products');
     });
 
+    it('exige alíquotas completas, fonte e vigência quando uma estimativa tributária é informada', async () => {
+      await expect(service.create('n1', {
+        nome: 'Salgado',
+        preco: 10,
+        aliqTributosFederais: 12.5,
+      } as any)).rejects.toThrow('Informe as alíquotas aproximadas federal, estadual e municipal juntas');
+      expect(mockPrisma.produto.create).not.toHaveBeenCalled();
+    });
+
     it('deve rejeitar PLU duplicado no mesmo negócio', async () => {
       mockPrisma.produto.findFirst.mockResolvedValue({ id: 'outro' });
 
@@ -378,8 +387,7 @@ describe('ProdutosService', () => {
       expect(result.resumo[0].precoNovo).toBe(90);
     });
 
-    it('deve aplicar ajuste fixo de soma no preço', async () => {
-      mockPrisma.produto.findMany.mockResolvedValue([produto]);
+    it('deve aplicar ajuste fixo de soma no preço', async () => {      mockPrisma.produto.findMany.mockResolvedValue([produto]);
       mockPrisma.produto.update.mockResolvedValue({});
 
       const result = await service.ajustarPrecosEmMassa('n1', {
@@ -528,6 +536,63 @@ describe('ProdutosService', () => {
 
       expect(result.resumo[0].precoNovo).toBe(0);
       expect(result.resumo[0].custoNovo).toBe(0);
+    });
+  });
+
+  describe('aplicarPadraoFiscal', () => {
+    const padrao = { ncm: '21069090', cfop: '5102', csosn: '102' };
+
+    it('preche apenas campos vazios quando apenasVazios', async () => {
+      mockPrisma.produto.findMany.mockResolvedValue([
+        { id: 'p1', nome: 'A', ncm: '19023000', cfop: null, csosn: null, cest: null },
+      ]);
+      mockPrisma.produto.update.mockResolvedValue({});
+
+      const result = await service.aplicarPadraoFiscal('n1', padrao as any);
+
+      expect(result.atualizados).toBe(1);
+      expect(mockPrisma.produto.update).toHaveBeenCalledWith({
+        where: { id: 'p1' },
+        data: { cfop: '5102', csosn: '102' },
+      });
+    });
+
+    it('sobrescreve tudo quando apenasVazios=false e aplica origem', async () => {
+      mockPrisma.produto.findMany.mockResolvedValue([
+        { id: 'p1', nome: 'A', ncm: '19023000', cfop: '6108', csosn: '400', cest: null },
+      ]);
+      mockPrisma.produto.update.mockResolvedValue({});
+
+      const result = await service.aplicarPadraoFiscal('n1', {
+        ...padrao,
+        origem: 0,
+        apenasVazios: false,
+      } as any);
+
+      expect(result.atualizados).toBe(1);
+      expect(mockPrisma.produto.update).toHaveBeenCalledWith({
+        where: { id: 'p1' },
+        data: { ncm: '21069090', cfop: '5102', csosn: '102', origem: 0 },
+      });
+    });
+
+    it('não atualiza produto já completo quando apenasVazios', async () => {
+      mockPrisma.produto.findMany.mockResolvedValue([
+        { id: 'p1', nome: 'A', ncm: '19023000', cfop: '5102', csosn: '102', cest: null },
+      ]);
+
+      const result = await service.aplicarPadraoFiscal('n1', padrao as any);
+
+      expect(result.atualizados).toBe(0);
+      expect(mockPrisma.produto.update).not.toHaveBeenCalled();
+    });
+
+    it('lança erro quando nenhum produto é encontrado', async () => {
+      mockPrisma.produto.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.aplicarPadraoFiscal('n1', padrao as any),
+      ).rejects.toThrow('Nenhum produto encontrado para aplicar o padrão fiscal');
     });
   });
 
