@@ -73,7 +73,7 @@ describe('FiscalService', () => {
       },
       pedido: { findUnique: jest.fn(), update: jest.fn().mockResolvedValue({}) },
       produto: { findMany: jest.fn().mockResolvedValue([]) },
-      fiscalEvento: { create: jest.fn().mockResolvedValue({ id: 'ev1' }) },
+      fiscalEvento: { create: jest.fn().mockResolvedValue({ id: 'ev1' }), findFirst: jest.fn() },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     queue = { add: jest.fn().mockResolvedValue({}) };
@@ -347,6 +347,106 @@ describe('FiscalService', () => {
     prisma.documentoFiscal.findFirst.mockResolvedValue(null);
 
     await expect(service.ativarEmissao('neg1')).rejects.toThrow(/emita e autorize uma NFC-e em homologação/);
+    expect(prisma.configuracaoFiscal.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: { ativo: true } }));
+  });
+
+  it('recupera autorização comprovada no XML quando uma consulta posterior marcou a NFC-e como erro', async () => {
+    prisma.configuracaoFiscal.findUnique.mockResolvedValue(configFiscal({ ambiente: 'PRODUCAO', ativo: false }));
+    prisma.produto.findMany.mockResolvedValue([]);
+    prisma.documentoFiscal.findFirst.mockResolvedValue(null);
+    prisma.documentoFiscal.findMany.mockResolvedValue([{
+      id: 'doc-homolog',
+      chaveAcesso: '2'.repeat(44),
+      xmlAutorizado: `<retEnviNFe><protNFe><infProt><chNFe>${'2'.repeat(44)}</chNFe><nProt>323260000269878</nProt><cStat>100</cStat></infProt></protNFe></retEnviNFe>`,
+    }]);
+    prisma.fiscalEvento.findFirst.mockResolvedValue({ cStat: '135', xMotivo: 'Evento registrado e vinculado' });
+
+    await service.ativarEmissao('neg1');
+
+    expect(prisma.documentoFiscal.update).toHaveBeenCalledWith({
+      where: { id: 'doc-homolog' },
+      data: expect.objectContaining({
+        status: 'CANCELADA',
+        protocolo: '323260000269878',
+        codigoStatus: '135',
+      }),
+    });
+    expect(prisma.configuracaoFiscal.update).toHaveBeenCalledWith({
+      where: { negocioId: 'neg1' },
+      data: { ativo: true },
+    });
+  });
+
+  it('não rebaixa autorização registrada no XML quando a consulta SEFAZ retorna 217', async () => {
+    const chave = '2'.repeat(44);
+    prisma.documentoFiscal.findFirst.mockResolvedValue({
+      id: 'doc1',
+      negocioId: 'neg1',
+      pedidoId: 'pedido1',
+      status: 'ERRO',
+      numero: 44,
+      serie: 1,
+      chaveAcesso: chave,
+      protocolo: null,
+      xmlAutorizado: `<retEnviNFe><protNFe><infProt><chNFe>${chave}</chNFe><nProt>323260000269878</nProt><cStat>100</cStat></infProt></protNFe></retEnviNFe>`,
+      configuracao: configFiscal(),
+    });
+    gateway.consultar.mockResolvedValue({ status: '217', cStat: '217', xMotivo: 'NF-e não consta na base de dados da SEFAZ' });
+    prisma.fiscalEvento.findFirst.mockResolvedValue({ cStat: '135', xMotivo: 'Evento registrado e vinculado' });
+    prisma.documentoFiscal.update.mockResolvedValue({ id: 'doc1', status: 'CANCELADA' });
+
+    const resultado = await service.consultarDocumento('neg1', 'doc1');
+
+    expect(prisma.documentoFiscal.update).toHaveBeenCalledWith({
+      where: { id: 'doc1' },
+      data: expect.objectContaining({
+        status: 'CANCELADA',
+        protocolo: '323260000269878',
+        codigoStatus: '135',
+      }),
+    });
+    expect(resultado).toMatchObject({ status: 'CANCELADA', statusSefaz: '217' });
+  });
+
+  it('aceita nota homologada cancelada (autorizada e depois cancelada) para ativar produção', async () => {
+    prisma.configuracaoFiscal.findUnique.mockResolvedValue(configFiscal({ ambiente: 'PRODUCAO', ativo: false }));
+    prisma.produto.findMany.mockResolvedValue([]);
+    prisma.documentoFiscal.findFirst.mockResolvedValue({ id: 'doc1' });
+    prisma.fiscalEvento.findFirst.mockResolvedValue({ id: 'ev1' });
+
+    await service.ativarEmissao('neg1');
+
+    expect(prisma.documentoFiscal.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          ambiente: 'HOMOLOGACAO',
+          status: { in: ['AUTORIZADA', 'CANCELADA'] },
+        }),
+      }),
+    );
+    expect(prisma.fiscalEvento.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tipo: '110111',
+          cStat: { in: ['135', '155'] },
+          documentoId: { not: null },
+          documento: { ambiente: 'HOMOLOGACAO' },
+        }),
+      }),
+    );
+    expect(prisma.configuracaoFiscal.update).toHaveBeenCalledWith({
+      where: { negocioId: 'neg1' },
+      data: { ativo: true },
+    });
+  });
+
+  it('bloqueia ativação em produção sem evento de cancelamento em homologação', async () => {
+    prisma.configuracaoFiscal.findUnique.mockResolvedValue(configFiscal({ ambiente: 'PRODUCAO', ativo: false }));
+    prisma.produto.findMany.mockResolvedValue([]);
+    prisma.documentoFiscal.findFirst.mockResolvedValue({ id: 'doc1' });
+    prisma.fiscalEvento.findFirst.mockResolvedValue(null);
+
+    await expect(service.ativarEmissao('neg1')).rejects.toThrow(/valide também o cancelamento/);
     expect(prisma.configuracaoFiscal.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: { ativo: true } }));
   });
 

@@ -124,7 +124,7 @@ export class ImprimirService {
       include: {
         itens: true,
         pagamentos: true,
-        negocio: { include: { configuracoes: true } },
+        negocio: { include: { configuracoes: true, configuracaoFiscal: true } },
       },
     });
     if (!pedido || pedido.negocioId !== negocioId) throw new NotFoundException('Pedido não encontrado');
@@ -133,7 +133,9 @@ export class ImprimirService {
     const totalItens = pedido.itens.reduce((s, i) => s + Number(i.precoUnitario) * Number(i.quantidade), 0);
     const taxaFrete = Number(pedido.taxaFrete) || 0;
     const config = pedido.negocio.configuracoes;
-    const endEmitente = config?.endereco ? formatarEndereco(config.endereco as any) : undefined;
+    const configFiscal = pedido.negocio.configuracaoFiscal;
+    const enderecoEmitente = configFiscal?.endereco || config?.endereco;
+    const endEmitente = enderecoEmitente ? formatarEndereco(enderecoEmitente as any) : undefined;
     const logoUrl = (pedido.negocio as any).logoUrl || undefined;
 
     const statusTraduzido = traduzirStatus(pedido.status);
@@ -143,9 +145,9 @@ export class ImprimirService {
     });
     const dadosCupom = {
       negocioNome: pedido.negocio.nome,
-      razaoSocial: config?.razaoSocial || undefined,
-      cnpj: config?.cnpj || undefined,
-      ie: config?.ie || undefined,
+      razaoSocial: configFiscal?.razaoSocial || config?.razaoSocial || undefined,
+      cnpj: configFiscal?.cnpj || config?.cnpj || undefined,
+      ie: configFiscal?.ie || config?.ie || undefined,
       enderecoEmitente: endEmitente,
       numeroPedido: pedido.id.slice(0, 8).toUpperCase(),
       numeroNfe: pedido.numeroNfe || undefined,

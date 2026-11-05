@@ -343,15 +343,57 @@ export class FiscalService implements OnApplicationBootstrap {
       throw new BadRequestException(`Corrija os pré-requisitos fiscais antes de ativar: ${verificacao.pendencias.join(' | ')}`);
     }
     if (config.ambiente === FiscalAmbiente.PRODUCAO) {
-      const notaHomologada = await this.prisma.documentoFiscal.findFirst({
-        where: { negocioId, ambiente: FiscalAmbiente.HOMOLOGACAO, status: FiscalStatusDocumento.AUTORIZADA },
+      let notaHomologada = await this.prisma.documentoFiscal.findFirst({
+        where: {
+          negocioId,
+          ambiente: FiscalAmbiente.HOMOLOGACAO,
+          status: { in: [FiscalStatusDocumento.AUTORIZADA, FiscalStatusDocumento.CANCELADA] },
+        },
         select: { id: true },
       });
+      if (!notaHomologada) {
+        const candidatas = await this.prisma.documentoFiscal.findMany({
+          where: { negocioId, ambiente: FiscalAmbiente.HOMOLOGACAO, xmlAutorizado: { not: null } },
+          select: { id: true, chaveAcesso: true, xmlAutorizado: true },
+          orderBy: { criadoEm: 'desc' },
+          take: 200,
+        });
+        for (const candidata of candidatas) {
+          const autorizacao = this.autorizacaoConfirmadaNoXml(candidata.xmlAutorizado, candidata.chaveAcesso);
+          if (!autorizacao) continue;
+          const cancelamento = await this.prisma.fiscalEvento.findFirst({
+            where: {
+              negocioId,
+              documentoId: candidata.id,
+              tipo: '110111',
+              cStat: { in: ['135', '155'] },
+            },
+            select: { cStat: true, xMotivo: true },
+          });
+          await this.prisma.documentoFiscal.update({
+            where: { id: candidata.id },
+            data: {
+              status: cancelamento ? FiscalStatusDocumento.CANCELADA : FiscalStatusDocumento.AUTORIZADA,
+              protocolo: autorizacao.protocolo,
+              codigoStatus: cancelamento?.cStat ?? autorizacao.cStat,
+              mensagem: cancelamento?.xMotivo ?? null,
+            },
+          });
+          notaHomologada = { id: candidata.id };
+          break;
+        }
+      }
       if (!notaHomologada) {
         throw new BadRequestException('Antes de produção, emita e autorize uma NFC-e em homologação e valide o DANFE/QR Code');
       }
       const cancelamentoHomologado = await this.prisma.fiscalEvento.findFirst({
-        where: { negocioId, documentoId: notaHomologada.id, tipo: '110111', cStat: { in: ['135', '155'] } },
+        where: {
+          negocioId,
+          tipo: '110111',
+          cStat: { in: ['135', '155'] },
+          documentoId: { not: null },
+          documento: { ambiente: FiscalAmbiente.HOMOLOGACAO },
+        },
         select: { id: true },
       });
       if (!cancelamentoHomologado) {
@@ -390,6 +432,32 @@ export class FiscalService implements OnApplicationBootstrap {
     const contexto = this.montarContexto(documento.configuracao, documento.numero ?? undefined);
     if (!contexto) throw new BadRequestException('Certificado A1 e CSC não configurados');
     const resposta = await this.chamadaSefaz('consulta', () => this.transmissor.consultar(documento.chaveAcesso!, contexto));
+    const autorizacao = this.autorizacaoConfirmadaNoXml(documento.xmlAutorizado, documento.chaveAcesso);
+    if (resposta.cStat === '217' && autorizacao) {
+      const cancelamento = await this.prisma.fiscalEvento.findFirst({
+        where: {
+          negocioId,
+          documentoId: documento.id,
+          tipo: '110111',
+          cStat: { in: ['135', '155'] },
+        },
+        select: { cStat: true, xMotivo: true },
+      });
+      const status = cancelamento ? FiscalStatusDocumento.CANCELADA : FiscalStatusDocumento.AUTORIZADA;
+      const atualizado = await this.prisma.documentoFiscal.update({
+        where: { id: documento.id },
+        data: {
+          status,
+          protocolo: autorizacao.protocolo,
+          codigoStatus: cancelamento?.cStat ?? autorizacao.cStat,
+          mensagem: cancelamento?.xMotivo ?? null,
+        },
+      });
+      if (!cancelamento) {
+        await this.aplicarAutorizacaoNoPedido(documento.pedidoId, documento.chaveAcesso, documento.numero, documento.serie, autorizacao.protocolo);
+      }
+      return { ...atualizado, statusSefaz: resposta.status, xMotivoSefaz: resposta.xMotivo };
+    }
     const novoStatus = this.classificarConsulta(resposta.cStat, documento.status);
     await this.prisma.documentoFiscal.update({
       where: { id: documento.id },
@@ -399,6 +467,15 @@ export class FiscalService implements OnApplicationBootstrap {
       await this.aplicarAutorizacaoNoPedido(documento.pedidoId, documento.chaveAcesso, documento.numero, documento.serie, documento.protocolo ?? resposta.protocolo);
     }
     return { ...documento, statusSefaz: resposta.status, protocolo: resposta.protocolo, status: novoStatus };
+  }
+
+  private autorizacaoConfirmadaNoXml(xml: string | null | undefined, chave: string | null | undefined) {
+    if (!xml || !chave) return null;
+    const escapedKey = chave.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const protocolo = xml.match(
+      new RegExp(`<protNFe\\b[\\s\\S]*?<infProt\\b[\\s\\S]*?<chNFe>${escapedKey}</chNFe>[\\s\\S]*?<nProt>(\\d{15})</nProt>[\\s\\S]*?<cStat>(100|150)</cStat>[\\s\\S]*?</infProt>`),
+    );
+    return protocolo ? { protocolo: protocolo[1], cStat: protocolo[2] } : null;
   }
 
   private classificarConsulta(cStat: string | undefined, atual: FiscalStatusDocumento): FiscalStatusDocumento {
