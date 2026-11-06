@@ -73,7 +73,14 @@ describe('FiscalService', () => {
       },
       pedido: { findUnique: jest.fn(), update: jest.fn().mockResolvedValue({}) },
       produto: { findMany: jest.fn().mockResolvedValue([]) },
-      fiscalEvento: { create: jest.fn().mockResolvedValue({ id: 'ev1' }), findFirst: jest.fn() },
+      fiscalEvento: {
+        create: jest.fn().mockResolvedValue({ id: 'ev1' }),
+        findFirst: jest.fn(),
+        findUnique: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+        aggregate: jest.fn().mockResolvedValue({ _max: { sequencia: null } }),
+      },
+      contaReceber: { findFirst: jest.fn() },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     queue = { add: jest.fn().mockResolvedValue({}) };
@@ -82,6 +89,7 @@ describe('FiscalService', () => {
       gerarXmlContingencia: jest.fn(),
       reenviar: jest.fn(),
       cancelar: jest.fn(),
+      econf: jest.fn(),
       consultar: jest.fn(),
       inutilizar: jest.fn(),
     };
@@ -161,10 +169,10 @@ describe('FiscalService', () => {
     expect(queue.add).not.toHaveBeenCalledWith('transmitir', expect.anything(), expect.anything());
   });
 
-  it('retém crediário em produção até existir o fluxo de conciliação ECONF', () => {
+  it('libera venda a prazo em produção após a integração do ECONF (baixa dispara o evento)', () => {
     const venda = pedido({ pagamentos: [{ metodo: 'CREDIARIO', valor: 25, status: 'PENDENTE', dadosPagamento: null }] });
     const erro = (service as any).validarEmissaoLocal(venda, 'SIMPLES_NACIONAL', configFiscal().endereco, 'PRODUCAO');
-    expect(erro).toContain('ECONF');
+    expect(erro).toBeNull();
   });
 
   it.each(['1', '2'])('valida cartão com tpIntegra=%s e registra a NFC-e como integrada', (tpIntegra) => {
@@ -203,6 +211,17 @@ describe('FiscalService', () => {
     expect(erro).toBeNull();
     expect(pagamento.tPag).toBe('20');
     expect(pagamento.card).toBeUndefined();
+  });
+
+  it('venda a prazo emite tPag 91 sem xPag (xPag só é permitido com tPag 99 — rejeição 442)', () => {
+    const venda = pedido({ pagamentos: [{ metodo: 'CREDIARIO', valor: 25, status: 'PENDENTE', dadosPagamento: null }] });
+
+    const erro = (service as any).validarEmissaoLocal(venda, 'SIMPLES_NACIONAL', configFiscal().endereco, 'HOMOLOGACAO');
+    const pagamento = (service as any).montarParams(venda, configFiscal()).pagamentos[0];
+
+    expect(erro).toBeNull();
+    expect(pagamento.tPag).toBe('91');
+    expect(pagamento.xPag).toBeUndefined();
   });
 
   it('bloqueia emissão quando o CNPJ da adquirente do cartão é inválido', () => {
@@ -293,6 +312,135 @@ describe('FiscalService', () => {
 
     await expect(service.cancelarDocumento('neg1', 'doc1', 'Cliente desistiu da compra do pedido')).rejects.toThrow(/SEFAZ rejeitou/);
     expect(prisma.documentoFiscal.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'CANCELADA' }) }));
+  });
+
+  function eventoEconf(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'ev1', negocioId: 'neg1', documentoId: 'doc1', contaReceberId: 'c1', tipo: '110750',
+      chaveAcesso: '9'.repeat(44), justificativa: 'Baixa de conta a receber de R$ 40,00 em 2026-11-05',
+      sequencia: 1, valor: 40, dataPagamento: new Date('2026-11-05T12:00:00Z'),
+      cStat: null, xMotivo: null, protocolo: null, xmlAssinado: null, xmlResposta: null,
+      criadoEm: new Date('2026-11-05T12:00:00Z'), ...overrides,
+    };
+  }
+
+  function documentoAutorizado(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'doc1', pedidoId: 'pedido1', negocioId: 'neg1', status: 'AUTORIZADA', chaveAcesso: '9'.repeat(44),
+      numero: 5, serie: 1, ambiente: 'HOMOLOGACAO', configuracao: configFiscal(), ...overrides,
+    };
+  }
+
+  it('prepararEconf cria evento 110750 com valor e data da baixa', async () => {
+    prisma.contaReceber.findFirst.mockResolvedValue({ id: 'c1', pedidoId: 'pedido1', valorTotal: 40, valorPago: 0 });
+    prisma.documentoFiscal.findFirst.mockResolvedValue(documentoAutorizado());
+    prisma.fiscalEvento.findFirst.mockResolvedValue(null);
+    prisma.fiscalEvento.create.mockResolvedValue({ id: 'ev1' });
+
+    const resultado = await service.prepararEconf('neg1', 'c1', 40, new Date('2026-11-05T12:00:00Z'));
+
+    expect(resultado).toEqual({ eventoId: 'ev1' });
+    expect(prisma.fiscalEvento.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        negocioId: 'neg1', documentoId: 'doc1', contaReceberId: 'c1', tipo: '110750',
+        valor: 40, dataPagamento: expect.any(Date), chaveAcesso: '9'.repeat(44),
+      }),
+    }));
+  });
+
+  it('prepararEconf ignora conta sem pedido (vale) e pedido sem NFC-e autorizada', async () => {
+    prisma.contaReceber.findFirst.mockResolvedValue({ id: 'c1', pedidoId: null });
+    await expect(service.prepararEconf('neg1', 'c1', 40, new Date())).resolves.toEqual({ eventoId: null, motivo: expect.stringContaining('sem NFC-e') });
+
+    prisma.contaReceber.findFirst.mockResolvedValue({ id: 'c1', pedidoId: 'pedido1' });
+    prisma.documentoFiscal.findFirst.mockResolvedValue(null);
+    await expect(service.prepararEconf('neg1', 'c1', 40, new Date())).resolves.toEqual({ eventoId: null, motivo: expect.stringContaining('NFC-e') });
+
+    prisma.documentoFiscal.findFirst.mockResolvedValue(documentoAutorizado({ status: 'CANCELADA' }));
+    await expect(service.prepararEconf('neg1', 'c1', 40, new Date())).resolves.toEqual({ eventoId: null, motivo: expect.stringContaining('CANCELADA') });
+    expect(prisma.fiscalEvento.create).not.toHaveBeenCalled();
+  });
+
+  it('prepararEconf reaproveita evento pendente da mesma conta (dedupe)', async () => {
+    prisma.contaReceber.findFirst.mockResolvedValue({ id: 'c1', pedidoId: 'pedido1' });
+    prisma.documentoFiscal.findFirst.mockResolvedValue(documentoAutorizado());
+    prisma.fiscalEvento.findFirst.mockResolvedValue({ id: 'ev9', cStat: null });
+
+    const resultado = await service.prepararEconf('neg1', 'c1', 40, new Date());
+
+    expect(resultado).toEqual({ eventoId: 'ev9' });
+    expect(prisma.fiscalEvento.create).not.toHaveBeenCalled();
+  });
+
+  it('enfileirarEconf agrega job econf com jobId único e nunca lança', async () => {
+    prisma.contaReceber.findFirst.mockResolvedValue({ id: 'c1', pedidoId: 'pedido1' });
+    prisma.documentoFiscal.findFirst.mockResolvedValue(documentoAutorizado());
+    prisma.fiscalEvento.findFirst.mockResolvedValue(null);
+    prisma.fiscalEvento.create.mockResolvedValue({ id: 'ev1' });
+
+    await service.enfileirarEconf('neg1', 'c1', 40, new Date('2026-11-05T12:00:00Z'));
+    expect(queue.add).toHaveBeenCalledWith('econf', { eventoId: 'ev1' }, expect.objectContaining({ jobId: 'econf-ev1', attempts: 3 }));
+
+    prisma.fiscalEvento.create.mockRejectedValue(new Error('banco fora'));
+    await expect(service.enfileirarEconf('neg1', 'c1', 40, new Date())).resolves.toBeUndefined();
+  });
+
+  it('processarEconf transmite tPag 01, persiste cStat 135 e audita', async () => {
+    prisma.fiscalEvento.findUnique.mockResolvedValue(eventoEconf());
+    prisma.documentoFiscal.findUnique.mockResolvedValue(documentoAutorizado());
+    prisma.fiscalEvento.aggregate.mockResolvedValue({ _max: { sequencia: null } });
+    gateway.econf.mockResolvedValue({ cStat: '135', xMotivo: 'Evento registrado e vinculado', protocolo: '143240000000001', xmlEvento: '<evento/>', xmlResposta: '<ret/>' });
+
+    const resultado = await service.processarEconf('ev1');
+
+    expect(gateway.econf).toHaveBeenCalledWith(expect.objectContaining({
+      chaveAcesso: '9'.repeat(44), nSeq: 1, valor: 40, dataPagamento: '2026-11-05', indPag: '1', tPag: '01',
+    }), expect.objectContaining({ ambiente: 'HOMOLOGACAO' }));
+    expect(prisma.fiscalEvento.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ cStat: '135', sequencia: 1, protocolo: '143240000000001' }),
+    }));
+    expect(resultado).toMatchObject({ registrado: true, cStat: '135', nSeq: 1 });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ acao: 'fiscal.econf' }),
+    }));
+  });
+
+  it('processarEconf usa o próximo nSeq após eventos já registrados da NFC-e', async () => {
+    prisma.fiscalEvento.findUnique.mockResolvedValue(eventoEconf({ id: 'ev2' }));
+    prisma.documentoFiscal.findUnique.mockResolvedValue(documentoAutorizado());
+    prisma.fiscalEvento.aggregate.mockResolvedValue({ _max: { sequencia: 3 } });
+    gateway.econf.mockResolvedValue({ cStat: '135', xMotivo: 'Evento registrado e vinculado', protocolo: '143240000000002', xmlEvento: '<evento/>', xmlResposta: '<ret/>' });
+
+    await service.processarEconf('ev2');
+
+    expect(gateway.econf).toHaveBeenCalledWith(expect.objectContaining({ nSeq: 4 }), expect.anything());
+  });
+
+  it('processarEconf em rejeição 573 incrementa a sequência para a nova tentativa', async () => {
+    prisma.fiscalEvento.findUnique.mockResolvedValue(eventoEconf());
+    prisma.documentoFiscal.findUnique.mockResolvedValue(documentoAutorizado());
+    prisma.fiscalEvento.aggregate.mockResolvedValue({ _max: { sequencia: null } });
+    gateway.econf.mockResolvedValue({ cStat: '573', xMotivo: 'Rejeição: duplicidade de evento', xmlEvento: '<evento/>', xmlResposta: '<ret/>' });
+
+    await expect(service.processarEconf('ev1')).rejects.toThrow(/duplicado/i);
+    expect(prisma.fiscalEvento.update).toHaveBeenCalledWith(expect.objectContaining({ data: { sequencia: 2 } }));
+  });
+
+  it('processarEconf é idempotente quando o evento já está registrado (135)', async () => {
+    prisma.fiscalEvento.findUnique.mockResolvedValue(eventoEconf({ cStat: '135', protocolo: '999' }));
+
+    const resultado = await service.processarEconf('ev1');
+
+    expect(resultado).toMatchObject({ registrado: true, cStat: '135' });
+    expect(gateway.econf).not.toHaveBeenCalled();
+  });
+
+  it('dispararEconf rejeita conta que não pertence ao pedido do documento', async () => {
+    prisma.documentoFiscal.findFirst.mockResolvedValue(documentoAutorizado());
+    prisma.contaReceber.findFirst.mockResolvedValue({ id: 'c1', pedidoId: 'outro-pedido', valorTotal: 40, valorPago: 0 });
+
+    await expect(service.dispararEconf('neg1', 'doc1', { contaReceberId: 'c1' })).rejects.toBeInstanceOf(BadRequestException);
+    expect(gateway.econf).not.toHaveBeenCalled();
   });
 
   it('salvarConfiguracao rejeita CNPJ com dígitos verificadores inválidos', async () => {

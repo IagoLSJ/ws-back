@@ -2,11 +2,16 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ContasReceberService } from './contas-receber.service';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { FiscalService } from '../fiscal/fiscal.service';
 
 const mockPrisma = {
   contaReceber: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), count: jest.fn(), update: jest.fn() },
   cliente: { findUnique: jest.fn(), update: jest.fn() },
   $transaction: jest.fn(),
+};
+
+const mockFiscal = {
+  enfileirarEconf: jest.fn().mockResolvedValue(undefined),
 };
 
 describe('ContasReceberService', () => {
@@ -15,11 +20,16 @@ describe('ContasReceberService', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [ContasReceberService, { provide: PrismaService, useValue: mockPrisma }],
+      providers: [
+        ContasReceberService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: FiscalService, useValue: mockFiscal },
+      ],
     }).compile();
     service = module.get<ContasReceberService>(ContasReceberService);
     prisma = module.get(PrismaService);
     jest.clearAllMocks();
+    mockFiscal.enfileirarEconf.mockResolvedValue(undefined);
   });
 
   describe('criar', () => {
@@ -141,6 +151,31 @@ describe('ContasReceberService', () => {
       const result = await service.darBaixa('n1', 'c1', { valor: 40 });
       expect(result!.status).toBe('PARCIAL');
     });
+
+    it('dispara o ECONF (110750) da baixa após o commit', async () => {
+      mockPrisma.contaReceber.findFirst.mockResolvedValue(conta);
+      mockPrisma.$transaction.mockImplementation((promises) => Promise.all(promises));
+      mockPrisma.contaReceber.update.mockResolvedValue({ id: 'c1', valorPago: 40, status: 'PARCIAL' });
+      mockPrisma.cliente.update.mockResolvedValue({});
+      mockPrisma.contaReceber.findUnique.mockResolvedValue({ id: 'c1', status: 'PARCIAL' });
+
+      await service.darBaixa('n1', 'c1', { valor: 40 });
+
+      expect(mockFiscal.enfileirarEconf).toHaveBeenCalledWith('n1', 'c1', 40, expect.any(Date));
+    });
+
+    it('baixa completa mesmo quando o enfileiramento do ECONF falha', async () => {
+      mockPrisma.contaReceber.findFirst.mockResolvedValue(conta);
+      mockPrisma.$transaction.mockImplementation((promises) => Promise.all(promises));
+      mockPrisma.contaReceber.update.mockResolvedValue({ id: 'c1', valorPago: 100, status: 'PAGO' });
+      mockPrisma.cliente.update.mockResolvedValue({});
+      mockPrisma.contaReceber.findUnique.mockResolvedValue({ id: 'c1', status: 'PAGO' });
+      mockFiscal.enfileirarEconf.mockRejectedValue(new Error('fila indisponível'));
+
+      const result = await service.darBaixa('n1', 'c1', { valor: 100 });
+
+      expect(result!.status).toBe('PAGO');
+    });
   });
 
   describe('darBaixaCliente', () => {
@@ -167,6 +202,8 @@ describe('ContasReceberService', () => {
       );
       expect(result.saldoAtual).toBe(30);
       expect(result.valorAbatido).toBe(50);
+      expect(mockFiscal.enfileirarEconf).toHaveBeenCalledTimes(1);
+      expect(mockFiscal.enfileirarEconf).toHaveBeenCalledWith('n1', 'a', 50, expect.any(Date));
     });
   });
 

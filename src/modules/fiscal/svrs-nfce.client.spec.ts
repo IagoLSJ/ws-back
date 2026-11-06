@@ -254,14 +254,19 @@ describe('SvrsNfceClient — montagem de XML NFC-e', () => {
     const url = (client as any).urlQrCodeMeta('1'.repeat(44), contexto({ cscId: '0000005' }), { dhEmi: '2026-09-29T10:00:00-03:00', vNF: 25, tpEmis: '1' });
     expect(url).toContain('nfceh.sefaz.ce.gov.br');
     expect(url).toContain(`?p=${'1'.repeat(44)}|2|2|5|`);
-    expect(url).toMatch(/\|[0-9a-f]{40}$/);
+    expect(url).toMatch(/\|[0-9A-F]{40}$/);
+  });
+
+  it('hash QR v2 online reproduz o exemplo do Manual de Especificações Técnicas (DANFE NFC-e)', () => {
+    const entrada = '28170800156225000131650110000151341562040824|2|1|1SEU-CODIGO-CSC-CONTRIBUINTE-36-CARACTERES';
+    expect((client as any).sha1hex(entrada)).toBe('DC6AE2C2B9A992BE59679AC365E29922DE6B7511');
   });
 
   it('monta QR v2 offline no pattern do XSD: chave|2|tpAmb|dia|vNF|hex56|cIdToken|hash40', () => {
     const digestB64 = Buffer.alloc(20, 1).toString('base64');
     const assinado = `<NFe><Signature><DigestValue>${digestB64}</DigestValue></Signature></NFe>`;
     const url = (client as any).urlQrCodeMeta('1'.repeat(44), contexto({ cscId: '0000005' }), { dhEmi: '2026-09-29T10:00:00-03:00', vNF: 25, tpEmis: '9' }, assinado);
-    expect(url).toMatch(/\?p=1{44}\|2\|2\|29\|25\.00\|[0-9a-f]{56}\|5\|[0-9a-f]{40}$/);
+    expect(url).toMatch(/\?p=1{44}\|2\|2\|29\|25\.00\|[0-9a-f]{56}\|5\|[0-9A-F]{40}$/);
   });
 
   it('valida emitente CE e código IBGE', () => {
@@ -299,6 +304,47 @@ describe('SvrsNfceClient — montagem de XML NFC-e', () => {
     expect(xml).not.toContain('<uf>');
     expect(xml).not.toContain('<nInf>');
     expect(xml).not.toContain('<dhEmi>');
+  });
+
+  it('monta o evento ECONF 110750 com detPag tPag 01, vPag e dPag (NT 2024.002 / IN 87/2025-CE)', async () => {
+    const c = new SvrsNfceClient();
+    jest.spyOn(c as any, 'extrairCertificado').mockReturnValue({});
+    jest.spyOn(c as any, 'assinar').mockImplementation((xml: unknown) => String(xml));
+    const soap = jest.spyOn(c as any, 'soap').mockResolvedValue({ rawXml: '<ret/>', cStat: '135' });
+
+    const resultado = await c.econf(
+      { chaveAcesso: '1'.repeat(44), nSeq: 1, valor: 40, dataPagamento: '2026-11-05' },
+      contexto(),
+    );
+
+    const xml = soap.mock.calls[0][1] as string;
+    expect(soap.mock.calls[0][0]).toBe('RecepcaoEvento4');
+    expect(xml).toContain('<envEvento xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.00">');
+    expect(xml).toContain(`Id="ID110750${'1'.repeat(44)}01"`);
+    expect(xml).toContain('<cOrgao>23</cOrgao>');
+    expect(xml).toContain('<tpEvento>110750</tpEvento>');
+    expect(xml).toContain('<nSeqEvento>1</nSeqEvento>');
+    expect(xml).toContain('<verEvento>1.00</verEvento>');
+    expect(xml).toContain('<descEvento>ECONF</descEvento>');
+    expect(xml).toContain('<verAplic>WALKER-1.0</verAplic>');
+    expect(xml).toContain('<indPag>1</indPag>');
+    expect(xml).toContain('<tPag>01</tPag>');
+    expect(xml).toContain('<vPag>40.00</vPag>');
+    expect(xml).toContain('<dPag>2026-11-05</dPag>');
+    expect(xml).toContain('</detPag></detEvento></infEvento></evento>');
+    expect(resultado).toMatchObject({ cStat: '135', xmlEvento: expect.stringContaining('110750'), xmlResposta: '<ret/>' });
+  });
+
+  it('valida data e nSeqEvento do ECONF antes de transmitir', async () => {
+    const c = new SvrsNfceClient();
+    jest.spyOn(c as any, 'extrairCertificado').mockReturnValue({});
+    const soap = jest.spyOn(c as any, 'soap').mockResolvedValue({ rawXml: '', cStat: '135' });
+
+    await expect(c.econf({ chaveAcesso: '1'.repeat(44), nSeq: 1, valor: 40, dataPagamento: '05/11/2026' }, contexto()))
+      .rejects.toThrow(/AAAA-MM-DD/);
+    await expect(c.econf({ chaveAcesso: '1'.repeat(44), nSeq: 100, valor: 40, dataPagamento: '2026-11-05' }, contexto()))
+      .rejects.toThrow(/1 e 99/);
+    expect(soap).not.toHaveBeenCalled();
   });
 
   it('usa o cStat individual de retEvento, não o cStat 128 do lote', () => {

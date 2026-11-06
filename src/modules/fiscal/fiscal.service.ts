@@ -530,6 +530,148 @@ export class FiscalService implements OnApplicationBootstrap {
     return atualizado;
   }
 
+  /**
+   * Prepara (ou reaproveita, se houver pendente) o registro do evento ECONF
+   * para uma baixa de conta a receber. Não transmite — só cria a linha de evento.
+   */
+  async prepararEconf(negocioId: string, contaReceberId: string, valor: number, dataPagamento: Date): Promise<{ eventoId: string | null; motivo?: string }> {
+    const conta = await this.prisma.contaReceber.findFirst({ where: { id: contaReceberId, negocioId } });
+    if (!conta) throw new NotFoundException('Conta a receber não encontrada');
+    if (!Number.isFinite(valor) || valor <= 0) throw new BadRequestException('Valor da baixa deve ser maior que zero');
+    if (!conta.pedidoId) return { eventoId: null, motivo: 'Conta sem pedido vinculado (vale/adiantamento) — sem NFC-e para conciliar' };
+    const documento = await this.prisma.documentoFiscal.findFirst({ where: { pedidoId: conta.pedidoId } });
+    if (!documento?.chaveAcesso) return { eventoId: null, motivo: 'Pedido não possui NFC-e com chave de acesso' };
+    if (documento.status !== FiscalStatusDocumento.AUTORIZADA) {
+      return { eventoId: null, motivo: `NFC-e está em status ${documento.status} — ECONF só se aplica a notas autorizadas` };
+    }
+    const pendente = await this.prisma.fiscalEvento.findFirst({ where: { contaReceberId, tipo: '110750', cStat: null } });
+    if (pendente) return { eventoId: pendente.id };
+    const evento = await this.prisma.fiscalEvento.create({
+      data: {
+        negocioId,
+        documentoId: documento.id,
+        contaReceberId,
+        tipo: '110750',
+        chaveAcesso: documento.chaveAcesso,
+        justificativa: `Baixa de conta a receber de R$ ${valor.toFixed(2)} em ${dataPagamento.toISOString().slice(0, 10)}`,
+        valor,
+        dataPagamento,
+      },
+    });
+    return { eventoId: evento.id };
+  }
+
+  /**
+   * Enfileira o ECONF após o commit da baixa. Nunca lança: falha de fila/SEFAZ
+   * não pode desfazer nem bloquear a baixa contábil (o endpoint manual cobre retry).
+   */
+  async enfileirarEconf(negocioId: string, contaReceberId: string, valor: number, dataPagamento: Date): Promise<void> {
+    try {
+      const { eventoId, motivo } = await this.prepararEconf(negocioId, contaReceberId, valor, dataPagamento);
+      if (!eventoId) {
+        if (motivo) this.logger.log(`ECONF ignorado para conta ${contaReceberId}: ${motivo}`);
+        return;
+      }
+      await this.fiscalQueue.add(
+        'econf',
+        { eventoId },
+        { jobId: `econf-${eventoId}`, attempts: 3, backoff: { type: 'exponential', delay: 15_000 }, removeOnComplete: 100, removeOnFail: 200 },
+      );
+    } catch (error) {
+      this.logger.warn(`Falha ao enfileirar ECONF da conta ${contaReceberId}: ${error}`);
+    }
+  }
+
+  /**
+   * Transmite o evento ECONF (110750) de um registro de baixa.
+   * nSeqEvento é derivado dos eventos já registrados (cStat 135/155) da própria NFC-e;
+   * em rejeição 573 (duplicado) a sequência é incrementada para a nova tentativa.
+   */
+  async processarEconf(eventoId: string) {
+    const evento = await this.prisma.fiscalEvento.findUnique({ where: { id: eventoId } });
+    if (!evento) throw new NotFoundException('Evento fiscal não encontrado');
+    if (evento.tipo !== '110750') throw new BadRequestException('Evento fiscal não é ECONF (110750)');
+    if (['135', '155'].includes(evento.cStat || '')) {
+      return { eventoId: evento.id, cStat: evento.cStat, xMotivo: evento.xMotivo, protocolo: evento.protocolo, nSeq: evento.sequencia, registrado: true };
+    }
+    if (!evento.valor || Number(evento.valor) <= 0) throw new BadRequestException('Evento ECONF sem valor de baixa registrado');
+    const documento = evento.documentoId
+      ? await this.prisma.documentoFiscal.findUnique({ where: { id: evento.documentoId }, include: { configuracao: true } })
+      : null;
+    if (!documento?.chaveAcesso || documento.status !== FiscalStatusDocumento.AUTORIZADA) {
+      const motivo = 'NFC-e não está autorizada (ou foi excluída) — ECONF descartado';
+      await this.prisma.fiscalEvento.update({ where: { id: evento.id }, data: { cStat: 'IGNORADO', xMotivo: motivo } });
+      return { eventoId: evento.id, cStat: 'IGNORADO', xMotivo: motivo, registrado: false };
+    }
+    const contexto = this.montarContexto(documento.configuracao, documento.numero ?? undefined);
+    if (!contexto) throw new BadRequestException('Certificado A1 e CSC não configurados');
+    contexto.ambiente = documento.ambiente;
+    const maxRegistrado = await this.prisma.fiscalEvento.aggregate({
+      where: { documentoId: documento.id, tipo: '110750', cStat: { in: ['135', '155'] } },
+      _max: { sequencia: true },
+    });
+    const nSeq = Math.max((maxRegistrado._max.sequencia ?? 0) + 1, evento.sequencia);
+    if (nSeq > 99) throw new BadRequestException('Limite de 99 eventos ECONF por NFC-e atingido');
+    const resposta = await this.chamadaSefaz('econf', () =>
+      this.transmissor.econf(
+        {
+          chaveAcesso: documento.chaveAcesso as string,
+          nSeq,
+          valor: Number(evento.valor),
+          dataPagamento: (evento.dataPagamento ?? evento.criadoEm).toISOString().slice(0, 10),
+          indPag: '1',
+          tPag: '01',
+        },
+        contexto,
+      ),
+    );
+    await this.prisma.fiscalEvento.update({
+      where: { id: evento.id },
+      data: {
+        sequencia: nSeq,
+        chaveAcesso: documento.chaveAcesso,
+        xmlAssinado: resposta.xmlEvento,
+        xmlResposta: resposta.xmlResposta,
+        cStat: resposta.cStat,
+        xMotivo: resposta.xMotivo,
+        protocolo: resposta.protocolo,
+      },
+    });
+    if (resposta.cStat === '573') {
+      await this.prisma.fiscalEvento.update({ where: { id: evento.id }, data: { sequencia: nSeq + 1 } });
+      throw new BadRequestException(`ECONF duplicado na SEFAZ (${resposta.xMotivo || '573'}) — nova tentativa usará nSeq ${nSeq + 1}`);
+    }
+    const sucesso = ['135', '155'].includes(resposta.cStat || '');
+    if (!sucesso) {
+      throw new BadRequestException(`SEFAZ rejeitou o ECONF (${resposta.cStat || 'sem cStat'}): ${resposta.xMotivo || 'resposta inválida'}`);
+    }
+    await this.auditoria(evento.negocioId, 'fiscal.econf', documento.id, {
+      contaReceberId: evento.contaReceberId,
+      valor: Number(evento.valor),
+      dataPagamento: (evento.dataPagamento ?? evento.criadoEm).toISOString().slice(0, 10),
+      nSeq,
+      protocolo: resposta.protocolo,
+    });
+    return { eventoId: evento.id, cStat: resposta.cStat, xMotivo: resposta.xMotivo, protocolo: resposta.protocolo, nSeq, registrado: true };
+  }
+
+  /** Endpoint manual: prepara e transmite o ECONF de uma baixa já registrada (fallback de retry). */
+  async dispararEconf(negocioId: string, documentoId: string, dto: { contaReceberId: string; valor?: number; dataPagamento?: string }) {
+    const documento = await this.prisma.documentoFiscal.findFirst({ where: { id: documentoId, negocioId } });
+    if (!documento) throw new NotFoundException('Documento fiscal não encontrado');
+    const conta = await this.prisma.contaReceber.findFirst({ where: { id: dto.contaReceberId, negocioId } });
+    if (!conta) throw new NotFoundException('Conta a receber não encontrada');
+    if (conta.pedidoId && conta.pedidoId !== documento.pedidoId) {
+      throw new BadRequestException('Conta a receber não pertence ao pedido deste documento fiscal');
+    }
+    const saldo = Number(conta.valorTotal) - Number(conta.valorPago);
+    const valor = dto.valor ?? (saldo > 0 ? saldo : Number(conta.valorTotal));
+    const dataPagamento = dto.dataPagamento ? new Date(dto.dataPagamento) : new Date();
+    const { eventoId, motivo } = await this.prepararEconf(negocioId, conta.id, valor, dataPagamento);
+    if (!eventoId) return { registrado: false, motivo };
+    return this.processarEconf(eventoId);
+  }
+
   async inutilizarNumeros(negocioId: string, serie: number, numeroInicial: number, numeroFinal: number, justificativa: string) {
     const config = await this.prisma.configuracaoFiscal.findUnique({ where: { negocioId } });
     if (!config) throw new BadRequestException('Configuração fiscal não cadastrada');
@@ -860,9 +1002,6 @@ export class FiscalService implements OnApplicationBootstrap {
     const pagamentos = (pedido.pagamentos || []).filter((p: any) => p.status !== 'CANCELADO' && p.status !== 'RECUSADO');
     const somaPagamentos = pagamentos.reduce((s: number, p: any) => s + Number(p.valor), 0);
     if (somaPagamentos + 0.01 < total) return `Pagamentos (R$ ${somaPagamentos.toFixed(2)}) menores que o valor da venda (R$ ${total.toFixed(2)})`;
-    if (ambiente === FiscalAmbiente.PRODUCAO && pagamentos.some((p: any) => p.metodo === 'CREDIARIO')) {
-      return 'Venda a prazo precisa do evento ECONF na SEFAZ-CE; o fluxo de baixa/ECONF ainda não está integrado, então a emissão foi retida';
-    }
     const cartoes = pagamentos.filter((p: any) => ['CARTAO_CREDITO', 'CARTAO_DEBITO'].includes(p.metodo));
     for (const cartao of cartoes) {
       const dados = (cartao.dadosPagamento || {}) as Record<string, unknown>;
@@ -989,7 +1128,6 @@ export class FiscalService implements OnApplicationBootstrap {
           vPag: Number(pg.valor) + (pg.metodo === 'DINHEIRO'
             ? Math.max(0, Number(dados.valorPago ?? pg.valor) - Number(pg.valor))
             : 0),
-          ...(pg.metodo === 'CREDIARIO' ? { xPag: 'Crediario (pagamento posterior - IN 142/2025-CE)' } : {}),
           ...(pg.metodo === 'OUTRO' ? { xPag: 'Outros' } : {}),
           ...(temDadosPag
             ? {

@@ -22,6 +22,9 @@ export class FiscalEmissaoProcessor extends WorkerHost {
     if (job.name === 'reenviar') {
       return this.fiscal.reenviarContingencia(job.data.documentoId);
     }
+    if (job.name === 'econf') {
+      return this.fiscal.processarEconf(job.data.eventoId);
+    }
     if (job.name === 'recuperar') {
       const resultado = await this.fiscal.recuperarPendentes();
       await this.queue.add('recuperar', {}, { delay: 15 * 60_000, attempts: 1, removeOnComplete: 10, removeOnFail: 10 });

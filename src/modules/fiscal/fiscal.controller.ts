@@ -6,6 +6,7 @@ import { FiscalService } from './fiscal.service';
 import { SalvarConfiguracaoFiscalDto } from './dto/salvar-configuracao-fiscal.dto';
 import { SalvarCertificadoA1Dto } from './dto/salvar-certificado-a1.dto';
 import { InutilizarNumerosDto } from './dto/inutilizar-numeros.dto';
+import { DispararEconfDto } from './dto/disparar-econf.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { BusinessAccessGuard } from '../../common/guards/business-access.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -104,6 +105,18 @@ export class FiscalController {
     @Body('motivo') motivo: string,
   ) {
     return this.fiscalService.cancelarDocumento(negocioId, documentoId, motivo);
+  }
+
+  @Post('documentos/:documentoId/econf')
+  @Roles(RoleNegocio.GERENTE)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Conciliar financeiramente (ECONF 110750) uma baixa de conta a receber da NFC-e' })
+  dispararEconf(
+    @Param('businessId') negocioId: string,
+    @Param('documentoId') documentoId: string,
+    @Body() dto: DispararEconfDto,
+  ) {
+    return this.fiscalService.dispararEconf(negocioId, documentoId, dto);
   }
 
   @Post('documentos/:documentoId/reprocessar')

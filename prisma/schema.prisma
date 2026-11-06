@@ -276,6 +276,7 @@ model FiscalEvento {
   id            String          @id @default(uuid())
   negocioId     String
   documentoId   String?
+  contaReceberId String?
   tipo          String
   chaveAcesso   String?
   serie         Int?
@@ -283,6 +284,8 @@ model FiscalEvento {
   numeroFinal   Int?
   justificativa String
   sequencia     Int             @default(1)
+  valor         Decimal?        @db.Decimal(10, 2)
+  dataPagamento DateTime?
   xmlAssinado   String?         @db.Text
   xmlResposta   String?         @db.Text
   cStat         String?
@@ -290,10 +293,12 @@ model FiscalEvento {
   protocolo     String?
   criadoEm      DateTime        @default(now())
 
-  documento DocumentoFiscal? @relation(fields: [documentoId], references: [id], onDelete: SetNull)
+  documento    DocumentoFiscal? @relation(fields: [documentoId], references: [id], onDelete: SetNull)
+  contaReceber ContaReceber?    @relation(fields: [contaReceberId], references: [id], onDelete: SetNull)
 
   @@index([negocioId, criadoEm])
   @@index([documentoId])
+  @@index([contaReceberId])
   @@map("fiscais_eventos")
 }
 
@@ -746,6 +751,8 @@ model ContaReceber {
   cliente Cliente @relation(fields: [clienteId], references: [id])
   negocio Negocio @relation(fields: [negocioId], references: [id])
   pedido  Pedido? @relation(fields: [pedidoId], references: [id])
+
+  eventosFiscais FiscalEvento[]
 
   @@index([clienteId])
   @@index([negocioId, status])

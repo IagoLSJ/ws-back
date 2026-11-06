@@ -125,11 +125,22 @@ export interface NFeEventoResultado {
   xmlResposta?: string;
 }
 
+export interface NFeEconfParams {
+  chaveAcesso: string;
+  nSeq: number;
+  valor: number;
+  dataPagamento: string; // AAAA-MM-DD
+  indPag?: '0' | '1';
+  tPag?: string;
+  xPag?: string;
+}
+
 export interface INfeGateway {
   emitir(params: EmitirNFeParams, contexto: NFeTransmissaoContexto): Promise<NFeResultado>;
   gerarXmlContingencia(params: EmitirNFeParams, contexto: NFeTransmissaoContexto): { xml: string; chave: string };
   reenviar(xmlAssinado: string, chave: string, contexto: NFeTransmissaoContexto): Promise<NFeResultado>;
   cancelar(chaveAcesso: string, motivo: string, contexto: NFeTransmissaoContexto): Promise<NFeEventoResultado>;
+  econf(params: NFeEconfParams, contexto: NFeTransmissaoContexto): Promise<NFeEventoResultado>;
   consultar(chaveAcesso: string, contexto: NFeTransmissaoContexto): Promise<{ status: string; protocolo?: string; cStat?: string; xMotivo?: string }>;
   inutilizar(serie: number, numeroInicial: number, numeroFinal: number, justificativa: string, contexto: NFeTransmissaoContexto): Promise<NFeEventoResultado>;
 }

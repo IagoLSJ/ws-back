@@ -1,10 +1,14 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { FiscalService } from '../fiscal/fiscal.service';
 import { ContaReceberStatus } from '@prisma/client';
 
 @Injectable()
 export class ContasReceberService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private fiscal: FiscalService,
+  ) {}
 
   /**
    * Vale/adiantamento avulso: conta a receber sem pedido/produto,
@@ -147,7 +151,10 @@ export class ContasReceberService {
         where: { id: conta.clienteId },
         data: { saldoDevedor: { decrement: valorBaixa } },
       }),
-    ]).then(([contaAtualizada]) => {
+    ]).then(async ([contaAtualizada]) => {
+      // Pós-commit: conciliação financeira (ECONF 110750) da SEFAZ — fire-and-forget,
+      // falha não desfaz a baixa; o endpoint manual de ECONF cobre o retry.
+      void this.fiscal.enfileirarEconf(negocioId, contaAtualizada.id, valorBaixa, new Date()).catch(() => undefined);
       return this.prisma.contaReceber.findUnique({
         where: { id: contaAtualizada.id },
         include: {
@@ -266,6 +273,7 @@ export class ContasReceberService {
         where: { id: conta.id },
         data: { valorPago: novoPago, status: novoStatus, dataPagamento: new Date(), observacao: dto.observacao },
       });
+      void this.fiscal.enfileirarEconf(negocioId, conta.id, abater, new Date()).catch(() => undefined);
       restante -= abater;
     }
 

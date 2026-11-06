@@ -5,6 +5,7 @@ import { SignedXml } from 'xml-crypto';
 import {
   EmitirNFeParams,
   INfeGateway,
+  NFeEconfParams,
   NFeEventoResultado,
   NFeResultado,
   NFeTransmissaoContexto,
@@ -158,6 +159,29 @@ export class SvrsNfceClient implements INfeGateway {
     const nSeq = 1;
     const id = `ID110111${chaveAcesso}${String(nSeq).padStart(2, '0')}`;
     const corpo = `<evento xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.00"><infEvento Id="${id}"><cOrgao>23</cOrgao><tpAmb>${this.tpAmb(contexto)}</tpAmb><CNPJ>${this.digits(chaveAcesso).slice(6, 20)}</CNPJ><chNFe>${chaveAcesso}</chNFe><dhEvento>${this.dataHora()}</dhEvento><tpEvento>110111</tpEvento><nSeqEvento>${nSeq}</nSeqEvento><verEvento>1.00</verEvento><detEvento versao="1.00"><descEvento>Cancelamento</descEvento><nProt>${consulta.protocolo}</nProt><xJust>${this.escapar(motivo)}</xJust></detEvento></infEvento></evento>`;
+    const assinado = this.assinar(corpo, cert);
+    const resposta = await this.soap(
+      'RecepcaoEvento4',
+      `<envEvento xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.00"><idLote>${this.lote()}</idLote>${assinado}</envEvento>`,
+      contexto,
+      cert,
+    );
+    return {
+      cStat: resposta.cStat,
+      xMotivo: resposta.xMotivo,
+      protocolo: resposta.protocolo,
+      xmlEvento: assinado,
+      xmlResposta: resposta.rawXml,
+    };
+  }
+
+  /** Evento ECONF — Conciliação Financeira (tpEvento 110750, NT 2023.004/2024.002, IN 87/2025-CE art. 2º §4º). */
+  async econf(params: NFeEconfParams, contexto: NFeTransmissaoContexto): Promise<NFeEventoResultado> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(params.dataPagamento)) throw new Error('Data de pagamento do ECONF deve estar no formato AAAA-MM-DD');
+    if (params.nSeq < 1 || params.nSeq > 99) throw new Error('nSeqEvento do ECONF deve estar entre 1 e 99');
+    const cert = this.extrairCertificado(contexto.certificadoPfx, contexto.senhaCertificado);
+    const id = `ID110750${params.chaveAcesso}${String(params.nSeq).padStart(2, '0')}`;
+    const corpo = `<evento xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.00"><infEvento Id="${id}"><cOrgao>23</cOrgao><tpAmb>${this.tpAmb(contexto)}</tpAmb><CNPJ>${this.digits(params.chaveAcesso).slice(6, 20)}</CNPJ><chNFe>${params.chaveAcesso}</chNFe><dhEvento>${this.dataHora()}</dhEvento><tpEvento>110750</tpEvento><nSeqEvento>${params.nSeq}</nSeqEvento><verEvento>1.00</verEvento><detEvento versao="1.00"><descEvento>ECONF</descEvento><verAplic>WALKER-1.0</verAplic><detPag><indPag>${params.indPag ?? '1'}</indPag><tPag>${params.tPag ?? '01'}</tPag>${params.xPag ? `<xPag>${this.escapar(params.xPag)}</xPag>` : ''}<vPag>${params.valor.toFixed(2)}</vPag><dPag>${params.dataPagamento}</dPag></detPag></detEvento></infEvento></evento>`;
     const assinado = this.assinar(corpo, cert);
     const resposta = await this.soap(
       'RecepcaoEvento4',
@@ -496,7 +520,7 @@ export class SvrsNfceClient implements INfeGateway {
   }
 
   private sha1hex(valor: string): string {
-    return createHash('sha1').update(valor).digest('hex');
+    return createHash('sha1').update(valor).digest('hex').toUpperCase();
   }
 
   private assinar(xml: string, cert: Certificado): string {
@@ -536,7 +560,7 @@ export class SvrsNfceClient implements INfeGateway {
       NfeRetAutorizacao4: 'NFeRetAutorizacao4',
       NfeConsultaProtocolo4: 'NFeConsultaProtocolo4',
       NfeInutilizacao4: 'NFeInutilizacao4',
-      RecepcaoEvento4: 'RecepcaoEvento4',
+      RecepcaoEvento4: 'NFeRecepcaoEvento4',
     };
     const endpoint = `${contexto.ambiente === 'HOMOLOGACAO' ? this.homologacao : this.producao}/${endpoints[servico]}`;
     const url = new URL(endpoint);
